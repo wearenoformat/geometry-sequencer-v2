@@ -1298,6 +1298,67 @@ export const useStore = create<AppState>((set, get) => {
             // No-op for Supabase
         },
 
+        duplicateFolder: async (id: string) => {
+            const { user } = get();
+            if (!user) return;
+
+            const source = get().folders.find(f => f.id === id);
+            if (!source) return;
+
+            try {
+                const { data: sourceProjects, error: fetchErr } = await supabase
+                    .from('projects')
+                    .select('data')
+                    .eq('user_id', user.id)
+                    .eq('folder_id', id);
+                if (fetchErr) throw fetchErr;
+
+                const newFolderId = crypto.randomUUID();
+                const newFolderName = `${source.name} (Copy)`;
+                const newOrder = get().folders.length;
+
+                const { error: folderErr } = await supabase.from('folders').insert({
+                    id: newFolderId,
+                    user_id: user.id,
+                    name: newFolderName,
+                    is_open: true,
+                    sort_order: newOrder,
+                });
+                if (folderErr) throw folderErr;
+
+                if (sourceProjects && sourceProjects.length > 0) {
+                    const now = Date.now();
+                    const rows = sourceProjects.map((row: { data: Project }) => {
+                        const src = row.data;
+                        const newProject: Project = {
+                            ...src,
+                            id: `pro-${Math.random().toString(36).substr(2, 9)}`,
+                            name: src.name,
+                            lastModified: now,
+                            folderId: newFolderId,
+                        };
+                        return {
+                            id: newProject.id,
+                            user_id: user.id,
+                            name: newProject.name,
+                            data: newProject,
+                            last_modified: newProject.lastModified,
+                            folder_id: newFolderId,
+                        };
+                    });
+                    const { error: insertErr } = await supabase.from('projects').insert(rows);
+                    if (insertErr) throw insertErr;
+                }
+
+                set(state => ({
+                    folders: [...state.folders, { id: newFolderId, name: newFolderName, isOpen: true }],
+                }));
+                await get().fetchProjects();
+            } catch (e) {
+                console.error('Failed to duplicate folder', e);
+            }
+        },
+
         createFolder: async (name: string) => {
             const { user } = get();
             if (!user) return; // Or handle local legacy?

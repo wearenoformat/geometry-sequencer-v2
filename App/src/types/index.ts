@@ -409,6 +409,7 @@ export interface AppState {
     loadProject: (id: string, view?: 'editor' | 'dashboard' | 'player') => void;
     createNewProject: () => void;
     duplicateProject: (id: string) => void;
+    duplicateFolder: (id: string) => Promise<void>;
     setGlobalLineColor: (color: string) => void;
     deleteProject: (id: string) => Promise<void>;
     setSavedProjects: (projects: ProjectMetadata[]) => void;

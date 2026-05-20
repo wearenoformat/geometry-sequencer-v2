@@ -361,6 +361,7 @@ const FolderDropArea = ({ folder, projects, overInfo = null, isProjectDraggingOv
 
     const toggleFolder = useStore(s => s.toggleFolder);
     const deleteFolder = useStore(s => s.deleteFolder);
+    const duplicateFolder = useStore(s => s.duplicateFolder);
     const sortFolderAlphabetically = useStore(s => s.sortFolderAlphabetically);
     const [isRenaming, setIsRenaming] = useState(startRenaming);
     const [newName, setNewName] = useState(folder.name);
@@ -493,6 +494,14 @@ const FolderDropArea = ({ folder, projects, overInfo = null, isProjectDraggingOv
                                 <ArrowDownAZ size={12} />
                             </button>
                         )}
+                        <button
+                            className="p-1 hover:text-[#D4AF37] text-white/30"
+                            title="Duplicate folder and all its projects"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                duplicateFolder(folder.id);
+                            }}
+                        ><Copy size={12} /></button>
                         <button className="p-1 hover:text-white text-white/30" onClick={handleStartRenaming}><Edit2 size={12} /></button>
                         <button className="p-1 hover:text-red-500 text-white/30" onClick={(e) => {
                             e.stopPropagation();
