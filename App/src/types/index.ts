@@ -194,8 +194,13 @@ export interface LayerConfig {
     // Circle Specific
     shapeArc: number; // 0-360
 
-    // Gradient Specific
+    // Gradient Specific. gradientEnabled is the legacy "applies to both" flag —
+    // when the per-target flags below are undefined it acts as the default for both.
+    // strokeGradientEnabled / fillGradientEnabled let stroke and fill independently
+    // choose flat vs gradient paint. gradientStops is shared.
     gradientEnabled?: boolean;
+    strokeGradientEnabled?: boolean;
+    fillGradientEnabled?: boolean;
     gradientStops?: { id: string; offset: number; color: string }[];
 
 

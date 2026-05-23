@@ -460,6 +460,8 @@ export interface LayerConfig {
 
     // Gradient Specific
     gradientEnabled?: boolean;
+    strokeGradientEnabled?: boolean;
+    fillGradientEnabled?: boolean;
     gradientStops?: { id: string; offset: number; color: string }[];
 
 
@@ -1087,6 +1089,8 @@ export class GeometryRenderer {
                     gapLength: layer.config.gapLength,
                     // Gradient
                     gradientEnabled: layer.config.gradientEnabled,
+                    strokeGradientEnabled: layer.config.strokeGradientEnabled,
+                    fillGradientEnabled: layer.config.fillGradientEnabled,
                     gradientStops: layer.config.gradientStops,
                 };
             }
@@ -1112,7 +1116,7 @@ export class GeometryRenderer {
             } : layer.config;
 
             // --- BUILD CONTENT USING POOL ---
-            const buildContent = (rotationDeg: number = 0, xVal?: number, yVal?: number): Container => {
+            const buildContent = (rotationDeg: number = 0, xVal?: number, yVal?: number, paintMode: 'both' | 'fill-only' | 'stroke-only' = 'both'): Container => {
                 const rootWrapper = this.getContainer();
 
                 rootWrapper.x = xVal ?? currentPosX;
@@ -1154,6 +1158,14 @@ export class GeometryRenderer {
                         renderConfig = {
                             ...effectiveConfig,
                             ichingInputId: (i % 64) + 1
+                        };
+                    }
+
+                    if (paintMode !== 'both') {
+                        renderConfig = {
+                            ...renderConfig,
+                            fillEnabled: paintMode === 'fill-only' ? renderConfig.fillEnabled : false,
+                            strokeEnabled: paintMode === 'stroke-only' ? renderConfig.strokeEnabled : false,
                         };
                     }
 
@@ -1243,19 +1255,42 @@ export class GeometryRenderer {
 
             const createRenderableUnit = (rotationDeg: number = 0, xVal?: number, yVal?: number): Container => {
                 const wrapper = this.getContainer();
-                const content = buildContent(rotationDeg, xVal, yVal);
-                wrapper.addChild(content);
 
-                if (effectiveConfig.gradientEnabled && effectiveConfig.gradientStops && effectiveConfig.gradientStops.length > 0) {
-                    const texture = createGradientTexture(effectiveConfig.gradientStops);
+                const legacyGrad = effectiveConfig.gradientEnabled ?? false;
+                const sg = effectiveConfig.strokeGradientEnabled ?? legacyGrad;
+                const fg = effectiveConfig.fillGradientEnabled ?? legacyGrad;
+                const stops = effectiveConfig.gradientStops;
+                const hasGradient = (sg || fg) && !!stops && stops.length > 0;
+
+                const addGradientMaskedBy = (maskTarget: Container) => {
+                    const texture = createGradientTexture(stops!);
                     const sprite = new Sprite(texture);
                     sprite.anchor.set(0.5);
                     const diag = Math.sqrt(app.renderer.width ** 2 + app.renderer.height ** 2);
                     sprite.width = diag;
                     sprite.height = diag;
-
                     wrapper.addChild(sprite);
-                    sprite.mask = content;
+                    sprite.mask = maskTarget;
+                };
+
+                const needsSplit =
+                    hasGradient &&
+                    sg !== fg &&
+                    !!effectiveConfig.fillEnabled &&
+                    !!effectiveConfig.strokeEnabled;
+
+                if (!needsSplit) {
+                    const content = buildContent(rotationDeg, xVal, yVal);
+                    wrapper.addChild(content);
+                    if (hasGradient) addGradientMaskedBy(content);
+                } else {
+                    const fillContent = buildContent(rotationDeg, xVal, yVal, 'fill-only');
+                    wrapper.addChild(fillContent);
+                    if (fg) addGradientMaskedBy(fillContent);
+
+                    const strokeContent = buildContent(rotationDeg, xVal, yVal, 'stroke-only');
+                    wrapper.addChild(strokeContent);
+                    if (sg) addGradientMaskedBy(strokeContent);
                 }
 
                 return wrapper;

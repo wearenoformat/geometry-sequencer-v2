@@ -5,7 +5,11 @@ export interface SvgRecolorOptions {
     fillColor?: string;
     strokeEnabled?: boolean;
     strokeColor?: string;
+    // gradientEnabled is the legacy "applies to both" flag. When the per-target
+    // flags below are undefined it acts as the default for both.
     gradientEnabled?: boolean;
+    strokeGradientEnabled?: boolean;
+    fillGradientEnabled?: boolean;
     gradientStops?: GradientStop[];
 }
 
@@ -22,14 +26,17 @@ const GRADIENT_ID = '__gs_fill_gradient__';
 // Build a deterministic cache key for a given color config. Empty string means
 // "no recoloring" (render the base SVG unchanged).
 export function buildColorKey(opts: SvgRecolorOptions): string {
-    const anyOn = opts.fillEnabled || opts.strokeEnabled || opts.gradientEnabled;
+    const legacyGrad = opts.gradientEnabled ?? false;
+    const sg = opts.strokeGradientEnabled ?? legacyGrad;
+    const fg = opts.fillGradientEnabled ?? legacyGrad;
+    const anyOn = opts.fillEnabled || opts.strokeEnabled || sg || fg;
     if (!anyOn) return '';
     const f = opts.fillEnabled ? (opts.fillColor ?? '') : 'x';
     const s = opts.strokeEnabled ? (opts.strokeColor ?? '') : 'x';
-    const g = opts.gradientEnabled
+    const gStops = (sg || fg)
         ? (opts.gradientStops ?? []).map(st => `${st.offset}:${st.color}`).join(',')
         : 'x';
-    return `f=${f}|s=${s}|g=${g}`;
+    return `f=${f}|s=${s}|sg=${sg ? 1 : 0}|fg=${fg ? 1 : 0}|g=${gStops}`;
 }
 
 // Reads the currently-resolved paint on an element, honoring inline style
@@ -92,11 +99,16 @@ export function recolorSvg(svgText: string, opts: SvgRecolorOptions): string {
     // user-facing model is "one color (or gradient) paints whatever the shape
     // already paints". Without this, stroke-only icons render in the flat
     // strokeColor while gradient mode is "on" and the gradient never appears.
-    const gradientPaint = opts.gradientEnabled ? `url(#${GRADIENT_ID})` : null;
+    const legacyGrad = opts.gradientEnabled ?? false;
+    const sg = opts.strokeGradientEnabled ?? legacyGrad;
+    const fg = opts.fillGradientEnabled ?? legacyGrad;
+    const gradientPaint = (sg || fg) ? `url(#${GRADIENT_ID})` : null;
     const rawFill = opts.fillEnabled ? (opts.fillColor ?? null) : null;
     const rawStroke = opts.strokeEnabled ? (opts.strokeColor ?? null) : null;
-    const fillPaint = gradientPaint ?? rawFill ?? rawStroke;
-    const strokePaint = gradientPaint ?? rawStroke ?? rawFill;
+    const fillGradientPaint = fg ? gradientPaint : null;
+    const strokeGradientPaint = sg ? gradientPaint : null;
+    const fillPaint = fillGradientPaint ?? rawFill ?? rawStroke;
+    const strokePaint = strokeGradientPaint ?? rawStroke ?? rawFill;
 
     // Rewrite <style> blocks in place — preserves `fill: none` on background
     // classes while replacing real colors with our paint. CSS beats presentation
@@ -105,7 +117,7 @@ export function recolorSvg(svgText: string, opts: SvgRecolorOptions): string {
         if (el.textContent) el.textContent = rewriteCssPaints(el.textContent, fillPaint, strokePaint);
     });
 
-    if (opts.gradientEnabled && (opts.gradientStops ?? []).length > 0) {
+    if ((sg || fg) && (opts.gradientStops ?? []).length > 0) {
         let defs: Element | null = svg.querySelector('defs');
         if (!defs) {
             defs = doc.createElementNS(ns, 'defs');

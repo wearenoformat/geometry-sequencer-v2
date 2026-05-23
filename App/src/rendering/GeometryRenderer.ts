@@ -398,6 +398,8 @@ export class GeometryRenderer {
                     gapLength: layer.config.gapLength,
                     // Gradient
                     gradientEnabled: layer.config.gradientEnabled,
+                    strokeGradientEnabled: layer.config.strokeGradientEnabled,
+                    fillGradientEnabled: layer.config.fillGradientEnabled,
                     gradientStops: layer.config.gradientStops,
                 };
             }
@@ -423,7 +425,13 @@ export class GeometryRenderer {
             } : layer.config;
 
             // --- BUILD CONTENT USING POOL ---
-            const buildContent = (rotationDeg: number = 0, xVal?: number, yVal?: number): Container => {
+            // paintMode controls whether primitive shapes render their fill, stroke,
+            // or both. Used by createRenderableUnit when stroke and fill need
+            // independent paint (e.g. stroke gradient + flat fill) — the shape is
+            // built twice with the gradient mask applied to only the targeted pass.
+            // Asset (SVG/PNG) layers ignore paintMode; their fill/stroke painting is
+            // driven inside svgRecolor.
+            const buildContent = (rotationDeg: number = 0, xVal?: number, yVal?: number, paintMode: 'both' | 'fill-only' | 'stroke-only' = 'both'): Container => {
                 const rootWrapper = this.getContainer();
 
                 rootWrapper.x = xVal ?? currentPosX;
@@ -475,6 +483,8 @@ export class GeometryRenderer {
                             strokeEnabled: effectiveConfig.strokeEnabled,
                             strokeColor: effectiveConfig.strokeColor,
                             gradientEnabled: effectiveConfig.gradientEnabled,
+                            strokeGradientEnabled: effectiveConfig.strokeGradientEnabled,
+                            fillGradientEnabled: effectiveConfig.fillGradientEnabled,
                             gradientStops: effectiveConfig.gradientStops,
                         };
                         const colorKey = buildColorKey(recolorOpts);
@@ -559,6 +569,14 @@ export class GeometryRenderer {
                         renderConfig = {
                             ...effectiveConfig,
                             ichingInputId: (i % 64) + 1
+                        };
+                    }
+
+                    if (paintMode !== 'both') {
+                        renderConfig = {
+                            ...renderConfig,
+                            fillEnabled: paintMode === 'fill-only' ? renderConfig.fillEnabled : false,
+                            strokeEnabled: paintMode === 'stroke-only' ? renderConfig.strokeEnabled : false,
                         };
                     }
 
@@ -652,20 +670,55 @@ export class GeometryRenderer {
 
             const createRenderableUnit = (rotationDeg: number = 0, xVal?: number, yVal?: number): Container => {
                 const wrapper = this.getContainer();
-                const content = buildContent(rotationDeg, xVal, yVal);
-                wrapper.addChild(content);
 
-                if (effectiveConfig.gradientEnabled && effectiveConfig.gradientStops && effectiveConfig.gradientStops.length > 0) {
-                    const texture = createGradientTexture(effectiveConfig.gradientStops);
+                // Per-target gradient flags, falling back to the legacy layer-level
+                // gradientEnabled (which meant "applies to both") when unset.
+                const legacyGrad = effectiveConfig.gradientEnabled ?? false;
+                const sg = effectiveConfig.strokeGradientEnabled ?? legacyGrad;
+                const fg = effectiveConfig.fillGradientEnabled ?? legacyGrad;
+                const stops = effectiveConfig.gradientStops;
+                const hasGradient = (sg || fg) && !!stops && stops.length > 0;
+
+                const addGradientMaskedBy = (maskTarget: Container) => {
+                    const texture = createGradientTexture(stops!);
                     const sprite = new Sprite(texture);
                     sprite.anchor.set(0.5);
                     const diag = Math.sqrt(app.renderer.width ** 2 + app.renderer.height ** 2);
                     sprite.width = diag;
                     sprite.height = diag;
-
                     wrapper.addChild(sprite);
-                    sprite.mask = content;
+                    sprite.mask = maskTarget;
+                };
+
+                // Split-paint is only meaningful for primitive shapes where stroke
+                // and fill are both painted AND the two gradient toggles disagree.
+                // Asset shapes (SVG/PNG) handle their fill/stroke paint internally
+                // via svgRecolor, so they always take the single-pass path.
+                const isAsset = layer.type === 'asset_set' || layer.type === 'asset_single';
+                const needsSplit =
+                    !isAsset &&
+                    hasGradient &&
+                    sg !== fg &&
+                    !!effectiveConfig.fillEnabled &&
+                    !!effectiveConfig.strokeEnabled;
+
+                if (!needsSplit) {
+                    const content = buildContent(rotationDeg, xVal, yVal);
+                    wrapper.addChild(content);
+                    if (hasGradient) addGradientMaskedBy(content);
+                    return wrapper;
                 }
+
+                // Mixed-mode: build fill-only and stroke-only passes so the
+                // gradient mask can apply to just one. Order matters — fill paints
+                // first (below), stroke paints on top.
+                const fillContent = buildContent(rotationDeg, xVal, yVal, 'fill-only');
+                wrapper.addChild(fillContent);
+                if (fg) addGradientMaskedBy(fillContent);
+
+                const strokeContent = buildContent(rotationDeg, xVal, yVal, 'stroke-only');
+                wrapper.addChild(strokeContent);
+                if (sg) addGradientMaskedBy(strokeContent);
 
                 return wrapper;
             };
