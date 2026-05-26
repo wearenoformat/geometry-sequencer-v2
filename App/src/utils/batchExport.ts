@@ -13,11 +13,34 @@ import {
     blobToBase64,
     collectExportAssets,
     escapeForTemplate,
+    extensionForImageMime,
     loadPlayerBundles,
     mergeCollectedAssets,
+    parseDataUrl,
     safeFilename,
+    stripThumbnail,
     type CollectedExport,
 } from './exportHelpers';
+
+type ProjectWithThumb = Project & { thumbnailData?: string };
+
+// If the project carries a base64 data-URL thumbnail (stamped by the batch
+// modal at load time), write it as a sibling file in the zip and return
+// the path + extension used. The JSON files never embed it.
+const writeThumbnailFile = (
+    zip: JSZip,
+    project: ProjectWithThumb,
+    basePathWithoutExt: string,
+): { filename: string; ext: string } | null => {
+    const thumb = project.thumbnailData;
+    if (!thumb) return null;
+    const parsed = parseDataUrl(thumb);
+    if (!parsed) return null;
+    const ext = extensionForImageMime(parsed.mime);
+    const filename = `${basePathWithoutExt}.${ext}`;
+    zip.file(filename, parsed.base64, { base64: true });
+    return { filename, ext };
+};
 
 export type BatchProgressStatus = 'pending' | 'running' | 'done' | 'error';
 export type BatchProgressCb = (
@@ -68,7 +91,9 @@ export async function buildBatchJsonZip(opts: BatchOpts): Promise<Blob> {
     for (let i = 0; i < projects.length; i++) {
         checkAbort(signal);
         onProgress(i, 'running', 'Writing JSON', 0);
-        zip.file(`${slugs[i]}.json`, JSON.stringify(projects[i], null, 2));
+        const p = projects[i] as ProjectWithThumb;
+        zip.file(`${slugs[i]}.json`, JSON.stringify(stripThumbnail(p), null, 2));
+        writeThumbnailFile(zip, p, slugs[i]);
         onProgress(i, 'done', 'Done', 100);
     }
 
@@ -106,13 +131,15 @@ export async function buildBatchHtmlZip(opts: BatchOpts): Promise<Blob> {
     const merged = mergeCollectedAssets(perProjectAssets);
     const hasAssets = merged.assets.length > 0;
 
+    const thumbFilesBySlug: Record<string, string | null> = {};
     for (let i = 0; i < projects.length; i++) {
         checkAbort(signal);
-        const p = projects[i];
+        const p = projects[i] as ProjectWithThumb;
         const slug = slugs[i];
         onProgress(i, 'running', 'Writing files', 60);
+        const cleaned = stripThumbnail(p) as Project;
         const html = renderProjectHtml({
-            project: p,
+            project: cleaned,
             slug,
             transparentBg,
             includeAstro,
@@ -120,7 +147,9 @@ export async function buildBatchHtmlZip(opts: BatchOpts): Promise<Blob> {
             hasAssets,
         });
         zip.file(`${slug}/index.html`, html);
-        zip.file(`${slug}/${slug}.json`, JSON.stringify(p, null, 2));
+        zip.file(`${slug}/${slug}.json`, JSON.stringify(cleaned, null, 2));
+        const thumb = writeThumbnailFile(zip, p, `${slug}/thumbnail`);
+        thumbFilesBySlug[slug] = thumb ? `${slug}/thumbnail.${thumb.ext}` : null;
         onProgress(i, 'done', 'Done', 100);
     }
 
@@ -146,7 +175,7 @@ export async function buildBatchHtmlZip(opts: BatchOpts): Promise<Blob> {
     }
 
     // Root gallery index.
-    const galleryHtml = renderGalleryHtml(folderName, projects, slugs);
+    const galleryHtml = renderGalleryHtml(folderName, projects, slugs, thumbFilesBySlug);
     zip.file('index.html', galleryHtml);
 
     return zip.generateAsync({ type: 'blob' });
@@ -205,14 +234,17 @@ ${hasAssets ? '    <script src="../assets-registry.js"></script>\n' : ''}\
 </html>`;
 }
 
-function renderGalleryHtml(folderName: string, projects: Project[], slugs: string[]): string {
+function renderGalleryHtml(
+    folderName: string,
+    projects: Project[],
+    slugs: string[],
+    thumbFilesBySlug: Record<string, string | null>,
+): string {
     const tiles = projects.map((p, i) => {
         const slug = slugs[i];
-        // BatchExportModal stamps thumbnailData onto the loaded Project at
-        // load time even though it isn't on the Project type — read defensively.
-        const thumbData = (p as Project & { thumbnailData?: string }).thumbnailData;
-        const thumb = thumbData
-            ? `<img src="${thumbData}" alt="">`
+        const thumbFile = thumbFilesBySlug[slug];
+        const thumb = thumbFile
+            ? `<img src="${thumbFile}" alt="" loading="lazy">`
             : `<div class="thumb-fallback" style="background:${p.backgroundColor || '#111'}"></div>`;
         return `        <a class="tile" href="${slug}/index.html">
             ${thumb}
@@ -270,7 +302,9 @@ export async function buildBatchReactZip(opts: BatchOpts): Promise<Blob> {
     for (let i = 0; i < projects.length; i++) {
         checkAbort(signal);
         onProgress(i, 'running', 'Writing animation JSON', 0);
-        zip.file(`src/animations/${slugs[i]}.json`, JSON.stringify(projects[i], null, 2));
+        const p = projects[i] as ProjectWithThumb;
+        zip.file(`src/animations/${slugs[i]}.json`, JSON.stringify(stripThumbnail(p), null, 2));
+        writeThumbnailFile(zip, p, `src/animations/${slugs[i]}`);
         onProgress(i, 'done', 'Done', 100);
     }
 
@@ -461,7 +495,9 @@ export async function buildBatchReactNativeZip(opts: BatchOpts): Promise<Blob> {
 
     for (let i = 0; i < projects.length; i++) {
         checkAbort(signal);
-        zip.file(`src/animations/${slugs[i]}.json`, JSON.stringify(projects[i], null, 2));
+        const p = projects[i] as ProjectWithThumb;
+        zip.file(`src/animations/${slugs[i]}.json`, JSON.stringify(stripThumbnail(p), null, 2));
+        writeThumbnailFile(zip, p, `src/animations/${slugs[i]}`);
         onProgress(i, 'done', 'Done', 100);
     }
 

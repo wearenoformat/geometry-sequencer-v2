@@ -223,3 +223,31 @@ export const escapeForTemplate = (src: string) => src
 
 export const safeFilename = (name: string) =>
     name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+
+// Returns a shallow copy of the project with `thumbnailData` removed. Batch
+// flows stamp `thumbnailData` onto loaded Project objects so the gallery
+// page can use them, but we don't want that base64 payload bloating the
+// exported `.json` files — the PNG is written as a sibling file instead.
+export const stripThumbnail = <T extends { thumbnailData?: string }>(p: T): Omit<T, 'thumbnailData'> => {
+    const { thumbnailData: _ignored, ...rest } = p;
+    void _ignored;
+    return rest;
+};
+
+// Splits a `data:<mime>;base64,<body>` URL into its parts. Returns null
+// for anything that isn't a base64 data URL (we don't try to handle
+// URL-encoded data URLs — the thumbnail generator always emits base64).
+export const parseDataUrl = (dataUrl: string): { mime: string; base64: string } | null => {
+    const match = /^data:([^;,]+);base64,(.*)$/i.exec(dataUrl);
+    if (!match) return null;
+    return { mime: match[1], base64: match[2] };
+};
+
+// `image/png` → `png`, `image/jpeg` → `jpg`, etc. Used when writing
+// extracted thumbnails into the export zip.
+export const extensionForImageMime = (mime: string): string => {
+    if (mime === 'image/png') return 'png';
+    if (mime === 'image/jpeg' || mime === 'image/jpg') return 'jpg';
+    if (mime === 'image/webp') return 'webp';
+    return 'png';
+};
