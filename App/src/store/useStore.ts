@@ -197,6 +197,75 @@ const recalculateLayerBounds = (keyframes: LayerKeyframe[], currentTimeline: { s
     };
 };
 
+const migrateLegacyAnimationLayer = (layer: any): Layer => {
+    if (layer.keyframes) return layer as Layer;
+
+    const startVal: any = {};
+    const midVal: any = {};
+    const endVal: any = {};
+
+    if (layer.animation) {
+        Object.keys(layer.animation).forEach(key => {
+            const prop = layer.animation[key];
+            if (prop && typeof prop === 'object') {
+                startVal[key] = prop.start;
+                midVal[key] = prop.middle;
+                endVal[key] = prop.end;
+            }
+        });
+    }
+
+    const fill = (obj: any) => ({ ...DEFAULT_ANIMATABLES, ...obj });
+    const duration = (layer.timeline?.end || 10) - (layer.timeline?.start || 0);
+
+    return {
+        ...layer,
+        keyframes: [
+            { id: 'kf-start', time: 0, value: fill(startVal), easing: layer.animation?.easingSM || 'easeInOutSine' },
+            { id: 'kf-mid', time: duration / 2, value: fill(midVal), easing: layer.animation?.easingME || 'easeInOutSine' },
+            { id: 'kf-end', time: duration, value: fill(endVal), easing: 'linear' }
+        ]
+    } as Layer;
+};
+
+const normalizeProjectForV2 = (
+    projectData: Project,
+    seedFoldersByName: Map<string, string>
+): Project => {
+    if (!projectData?.layers) return projectData;
+
+    return {
+        ...projectData,
+        layers: projectData.layers.map((rawLayer: any) => {
+            const layer = migrateLegacyAnimationLayer(rawLayer);
+            const seedName = LEGACY_TYPE_TO_SEED_FOLDER[layer.type];
+            if (!seedName) return layer;
+
+            const folderId = seedFoldersByName.get(seedName);
+            if (!folderId) return layer;
+
+            return {
+                ...layer,
+                type: 'asset_set',
+                config: {
+                    ...layer.config,
+                    assetFolderId: folderId,
+                },
+            } as Layer;
+        }),
+    };
+};
+
+const referencedAssetFolderIds = (projectData: Project): string[] => {
+    const folderIds = new Set<string>();
+    for (const layer of projectData.layers || []) {
+        if (layer.type === 'asset_set' && layer.config?.assetFolderId) {
+            folderIds.add(layer.config.assetFolderId);
+        }
+    }
+    return [...folderIds];
+};
+
 const INITIAL_PROJECT: Project = {
     id: 'pro-default',
     name: 'New Project',
@@ -344,7 +413,17 @@ export const useStore = create<AppState>((set, get) => {
 
         setCurrentTime: (time: number) => set({ currentTime: time }),
 
-        setProject: (project: Project) => set({ project, activeLayerId: project.layers[0]?.id, isFreshProject: false }),
+        setProject: (project: Project) => {
+            const foldersByName = new Map(get().assetFolders.map(f => [f.name, f.id]));
+            const normalizedProject = normalizeProjectForV2(project, foldersByName);
+            referencedAssetFolderIds(normalizedProject).forEach((fid) => { get().fetchAssets(fid); });
+            set({
+                project: normalizedProject,
+                activeLayerId: normalizedProject.layers[0]?.id || null,
+                activeKeyframeId: normalizedProject.layers[0]?.keyframes?.[0]?.id || null,
+                isFreshProject: false
+            });
+        },
 
         setIsLooping: (isLooping: boolean) => set({ isLooping }),
 
@@ -1135,65 +1214,8 @@ export const useStore = create<AppState>((set, get) => {
                 }
 
                 if (projectData) {
-                    // MIGRATION LOGIC: Convert old projects to new keyframe format on load
-                    // (Simple check: does it have layers[0].animation?)
-                    if (projectData.layers && projectData.layers.length > 0 && projectData.layers[0].animation) {
-                        projectData.layers = projectData.layers.map((l: any) => {
-                            if (l.keyframes) return l; // Already migrated
-
-                            // Convert animation object to keyframes
-                            // Old: animation.radiusX.start/middle/end
-                            // New: keyframes: [{time:0, value:...}, {time:mid, value:...}, {time:end, value:...}]
-
-                            const startVal: any = {};
-                            const midVal: any = {};
-                            const endVal: any = {};
-
-                            Object.keys(l.animation).forEach(key => {
-                                const prop = l.animation[key];
-                                if (prop && typeof prop === 'object') {
-                                    startVal[key] = prop.start;
-                                    midVal[key] = prop.middle;
-                                    endVal[key] = prop.end;
-                                }
-                            });
-
-                            // Fill missing with defaults
-                            const fill = (obj: any) => ({ ...DEFAULT_ANIMATABLES, ...obj });
-
-                            const duration = l.timeline.end - l.timeline.start;
-
-                            return {
-                                ...l,
-                                keyframes: [
-                                    { id: 'kf-start', time: 0, value: fill(startVal), easing: l.animation.easingSM || 'easeInOutSine' },
-                                    { id: 'kf-mid', time: duration / 2, value: fill(midVal), easing: l.animation.easingME || 'easeInOutSine' },
-                                    { id: 'kf-end', time: duration, value: fill(endVal), easing: 'linear' }
-                                ]
-                            };
-                        });
-                    }
-
-                    // Legacy-type migration (Stage F): rewrite astrology / amino /
-                    // iching_lines layers into asset_set pointing at the matching seed
-                    // folder. The rewrite is in-memory here; the next save persists it.
-                    // Layers whose seed folder isn't available yet keep their legacy
-                    // type — the renderer's legacy branches still handle them.
                     const foldersByName = new Map(get().assetFolders.map(f => [f.name, f.id]));
-                    projectData.layers = projectData.layers.map((layer: any) => {
-                        const seedName = LEGACY_TYPE_TO_SEED_FOLDER[layer.type];
-                        if (!seedName) return layer;
-                        const folderId = foldersByName.get(seedName);
-                        if (!folderId) return layer;
-                        return {
-                            ...layer,
-                            type: 'asset_set',
-                            config: {
-                                ...layer.config,
-                                assetFolderId: folderId,
-                            },
-                        };
-                    });
+                    projectData = normalizeProjectForV2(projectData, foldersByName);
 
                     set({
                         project: projectData,
@@ -1209,13 +1231,7 @@ export const useStore = create<AppState>((set, get) => {
                     // Preload asset folders referenced by asset_set layers so the renderer
                     // can see their asset lists (asset_single uses the DB fallback in
                     // signedUrlForAsset, so no preload needed).
-                    const folderIds = new Set<string>();
-                    for (const layer of projectData.layers) {
-                        if (layer.type === 'asset_set' && layer.config?.assetFolderId) {
-                            folderIds.add(layer.config.assetFolderId);
-                        }
-                    }
-                    folderIds.forEach((fid) => { get().fetchAssets(fid); });
+                    referencedAssetFolderIds(projectData).forEach((fid) => { get().fetchAssets(fid); });
                 }
             } catch (e) {
                 console.error('Failed to load project', e);
@@ -2536,43 +2552,9 @@ export const useStore = create<AppState>((set, get) => {
                     return null;
                 }
 
-                let projectData = data.data as Project;
-
-                // Migration check: identical to loadProject logic
-                if (projectData.layers && projectData.layers.length > 0 && !projectData.layers[0].keyframes) {
-                    projectData = {
-                        ...projectData,
-                        layers: projectData.layers.map((l: any) => {
-                            // Convert old start/middle/end to keyframes
-                            const startVal: any = {};
-                            const midVal: any = {};
-                            const endVal: any = {};
-
-                            if (l.animation) {
-                                Object.keys(l.animation).forEach(key => {
-                                    const prop = l.animation[key];
-                                    if (prop && typeof prop === 'object') {
-                                        startVal[key] = prop.start;
-                                        midVal[key] = prop.middle;
-                                        endVal[key] = prop.end;
-                                    }
-                                });
-                            }
-
-                            const fill = (obj: any) => ({ ...DEFAULT_ANIMATABLES, ...obj });
-                            const duration = (l.timeline?.end || 10) - (l.timeline?.start || 0);
-
-                            return {
-                                ...l,
-                                keyframes: [
-                                    { id: 'kf-start', time: 0, value: fill(startVal), easing: l.animation?.easingSM || 'easeInOutSine' },
-                                    { id: 'kf-mid', time: duration / 2, value: fill(midVal), easing: l.animation?.easingME || 'easeInOutSine' },
-                                    { id: 'kf-end', time: duration, value: fill(endVal), easing: 'linear' }
-                                ]
-                            };
-                        })
-                    };
-                }
+                const foldersByName = new Map(get().assetFolders.map(f => [f.name, f.id]));
+                const projectData = normalizeProjectForV2(data.data as Project, foldersByName);
+                referencedAssetFolderIds(projectData).forEach((fid) => { get().fetchAssets(fid); });
 
                 return projectData;
             } catch (e) {

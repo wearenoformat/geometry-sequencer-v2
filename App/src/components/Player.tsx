@@ -9,6 +9,7 @@ const Player: React.FC = () => {
     const setView = useStore(s => s.setView);
     const isPlaying = useStore(s => s.isPlaying);
     const setIsPlaying = useStore(s => s.setIsPlaying);
+    const setProject = useStore(s => s.setProject);
 
 
     // If setProject isn't exposed, we might need to use setState on the store directly if possible or add it.
@@ -42,9 +43,8 @@ const Player: React.FC = () => {
             const res = await fetch(`projects/${id}.json`);
             if (res.ok) {
                 const projectData = await res.json();
+                setProject(projectData);
                 useStore.setState({
-                    project: projectData,
-                    activeLayerId: projectData.layers[0]?.id || null,
                     currentTime: 0,
                     isPlaying: true,
                     isLooping: true // Default to looping in standalone
