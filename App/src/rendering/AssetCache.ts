@@ -33,6 +33,18 @@ class AssetCacheImpl {
         return this.folderAssetsProvider ? this.folderAssetsProvider(folderId) : [];
     }
 
+    // Kick off metadata + source/texture loads for every asset in a folder up
+    // front, in parallel. Without this the renderer only triggers a load for the
+    // instance indices it happens to draw on a given frame, so a freshly-added
+    // folder reveals its assets one-by-one as each lazy fetch lands (they render
+    // as empty placeholders until then). Idempotent — ensureMeta dedups via the
+    // mimeTypes / inflightMeta maps, so calling it every frame is cheap.
+    prefetchFolder(folderId: string | null) {
+        for (const entry of this.getAssetsInFolder(folderId)) {
+            this.ensureMeta(entry.id);
+        }
+    }
+
     // Mime type once the asset's metadata has been fetched. Returns null while
     // loading — caller should retry next frame (renderer runs every tick).
     getMimeType(assetId: string): string | null {
