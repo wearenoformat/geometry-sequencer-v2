@@ -205,12 +205,20 @@ const migrateLegacyAnimationLayer = (layer: any): Layer => {
     const endVal: any = {};
 
     if (layer.animation) {
+        // Only copy values that are actually present. A missing start/middle/end
+        // (common in legacy data where a property wasn't fully keyed) must fall
+        // through to DEFAULT_ANIMATABLES — spreading an `undefined` would clobber
+        // the default and feed NaN into interpolation, snapping the element to a
+        // fallback position around that keyframe's time.
+        const assign = (target: any, key: string, val: unknown) => {
+            if (val !== undefined) target[key] = val;
+        };
         Object.keys(layer.animation).forEach(key => {
             const prop = layer.animation[key];
             if (prop && typeof prop === 'object') {
-                startVal[key] = prop.start;
-                midVal[key] = prop.middle;
-                endVal[key] = prop.end;
+                assign(startVal, key, prop.start);
+                assign(midVal, key, prop.middle);
+                assign(endVal, key, prop.end);
             }
         });
     }
