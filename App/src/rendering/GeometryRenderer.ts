@@ -447,6 +447,12 @@ export class GeometryRenderer {
                         ? assetCache.getAssetsInFolder(effectiveConfig.assetFolderId)
                         : [];
 
+                // Warm the whole folder in parallel so assets don't reveal
+                // themselves one-by-one as each lazy per-instance load lands.
+                if (layer.type === 'asset_set' && effectiveConfig.assetFolderId) {
+                    assetCache.prefetchFolder(effectiveConfig.assetFolderId);
+                }
+
                 // Resolve the asset id for this layer at instance index `i` (asset_set cycles
                 // through the folder; asset_single always returns the same id).
                 const resolveAssetId = (i: number): string | null => {
