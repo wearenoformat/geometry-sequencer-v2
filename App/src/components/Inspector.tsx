@@ -3,7 +3,7 @@ import { useStore } from '../store/useStore';
 import { ChevronUp, Star, RotateCw, Maximize, Layers, Trash2, Anchor, Pentagon, Asterisk, Plus, Timer, Grid, Move, TrendingUp, Shuffle, Hash, Palette, Lock, Unlock, FolderOpen, Image as ImageIcon, X } from 'lucide-react';
 import GradientEditor from './GradientEditor';
 import { MOLECULES } from '../data/molecules';
-import type { ShapeType, AnimatableProperties, AssetFolder, Asset } from '../types';
+import type { ShapeType, AnimatableProperties, AssetFolder, Asset, LayerConfig } from '../types';
 import BezierEditor from './BezierEditor';
 import { ModernToggle } from './ModernToggle';
 import { useInspectorTooltip } from './InspectorTooltip';
@@ -1023,7 +1023,7 @@ const Inspector: React.FC = () => {
                                             { id: '1', offset: 36, color: '#793720' },
                                             { id: '2', offset: 63, color: '#FCC698' }
                                         ];
-                                        const ensureStops = (patch: Record<string, unknown>) => {
+                                        const ensureStops = (patch: LayerConfig) => {
                                             if (!cfg.gradientStops?.length) patch.gradientStops = DEFAULT_STOPS;
                                             return patch;
                                         };
@@ -1032,7 +1032,7 @@ const Inspector: React.FC = () => {
                                         const writeMode = (target: 'stroke' | 'fill', useGradient: boolean) => {
                                             const nextStroke = target === 'stroke' ? useGradient : strokeGrad;
                                             const nextFill = target === 'fill' ? useGradient : fillGrad;
-                                            const patch: Record<string, unknown> = {
+                                            const patch: LayerConfig = {
                                                 ...cfg,
                                                 strokeGradientEnabled: nextStroke,
                                                 fillGradientEnabled: nextFill,
@@ -1095,7 +1095,7 @@ const Inspector: React.FC = () => {
                                                             onChange={(color) => {
                                                                 // Keep fillColor in sync only while FILLED is off, so
                                                                 // turning FILLED on later defaults to matching colors.
-                                                                const patch: Record<string, unknown> = { ...cfg, strokeColor: color, strokeEnabled: true };
+                                                                const patch: LayerConfig = { ...cfg, strokeColor: color, strokeEnabled: true };
                                                                 if (!cfg.fillEnabled) patch.fillColor = color;
                                                                 updateLayer(activeLayer.id, { config: patch });
                                                             }}

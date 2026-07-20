@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
     FolderPlus,
     Folder as FolderIcon,
+    FolderUp,
     Trash2,
     Edit2,
     Upload,
@@ -35,6 +36,96 @@ type UploadState =
     | { status: 'error'; name: string; reason: string };
 
 type ThumbState = { status: 'loading' } | { status: 'ready'; url: string } | { status: 'failed' };
+
+type PickedAssetFile = { file: File; relativePath: string };
+type UploadTarget =
+    | { kind: 'existing-folder'; folderId: string | null; label: string; files: File[] }
+    | { kind: 'new-folder'; folderName: string; label: string; files: File[] };
+
+type FileSystemEntryLike = {
+    isFile: boolean;
+    isDirectory: boolean;
+    name: string;
+};
+
+type FileSystemFileEntryLike = FileSystemEntryLike & {
+    file: (success: (file: File) => void, error?: (err: DOMException) => void) => void;
+};
+
+type FileSystemDirectoryEntryLike = FileSystemEntryLike & {
+    createReader: () => {
+        readEntries: (
+            success: (entries: FileSystemEntryLike[]) => void,
+            error?: (err: DOMException) => void,
+        ) => void;
+    };
+};
+
+type DataTransferItemWithEntry = Omit<DataTransferItem, 'webkitGetAsEntry'> & {
+    webkitGetAsEntry?: () => FileSystemEntryLike | null;
+};
+
+const normalizeAssetPath = (path: string) => path.replace(/\\/g, '/').replace(/^\/+/, '');
+
+const fileToPickedAssetFile = (file: File): PickedAssetFile => ({
+    file,
+    relativePath: normalizeAssetPath(file.webkitRelativePath || file.name),
+});
+
+const isAllowedMime = (mime: string): mime is AssetMimeType => ALLOWED.includes(mime as AssetMimeType);
+
+const readEntries = (directory: FileSystemDirectoryEntryLike): Promise<FileSystemEntryLike[]> => {
+    const reader = directory.createReader();
+    const entries: FileSystemEntryLike[] = [];
+
+    return new Promise((resolve, reject) => {
+        const readBatch = () => {
+            reader.readEntries((batch) => {
+                if (batch.length === 0) {
+                    resolve(entries);
+                    return;
+                }
+                entries.push(...batch);
+                readBatch();
+            }, reject);
+        };
+        readBatch();
+    });
+};
+
+const readEntryFiles = async (entry: FileSystemEntryLike, parentPath = ''): Promise<PickedAssetFile[]> => {
+    const relativePath = normalizeAssetPath(`${parentPath}${entry.name}`);
+
+    if (entry.isFile) {
+        const fileEntry = entry as FileSystemFileEntryLike;
+        const file = await new Promise<File>((resolve, reject) => fileEntry.file(resolve, reject));
+        return [{ file, relativePath }];
+    }
+
+    if (entry.isDirectory) {
+        const directory = entry as FileSystemDirectoryEntryLike;
+        const children = await readEntries(directory);
+        const nested = await Promise.all(children.map(child => readEntryFiles(child, `${relativePath}/`)));
+        return nested.flat();
+    }
+
+    return [];
+};
+
+const readDroppedAssetFiles = async (dataTransfer: DataTransfer): Promise<PickedAssetFile[]> => {
+    const entries = Array.from(dataTransfer.items || [])
+        .map(item => (item as unknown as DataTransferItemWithEntry).webkitGetAsEntry?.() ?? null)
+        .filter((entry): entry is FileSystemEntryLike => !!entry);
+
+    if (entries.length > 0) {
+        const nested = await Promise.all(entries.map(entry => readEntryFiles(entry)));
+        return nested.flat().filter(item => item.file.size > 0);
+    }
+
+    return Array.from(dataTransfer.files)
+        .filter(file => file.size > 0)
+        .map(fileToPickedAssetFile);
+};
 
 const Thumbnail = ({ asset }: { asset: Asset }) => {
     const signedUrlForAsset = useStore(s => s.signedUrlForAsset);
@@ -185,8 +276,12 @@ const AssetLibrary: React.FC = () => {
     const [isDragOver, setIsDragOver] = useState(false);
     const [uploads, setUploads] = useState<UploadState[]>([]);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    // Non-fatal info (e.g. "skipped N incompatible files") — distinct from errorMsg so a
+    // partial success doesn't read as an outright failure.
+    const [noticeMsg, setNoticeMsg] = useState<string | null>(null);
     const [folderToDelete, setFolderToDelete] = useState<{ folder: AssetFolder; count: number } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const folderInputRef = useRef<HTMLInputElement>(null);
 
     // Initial hydration
     useEffect(() => {
@@ -204,49 +299,201 @@ const AssetLibrary: React.FC = () => {
         return assetsByFolder[key] || [];
     }, [assetsByFolder, selectedFolderId]);
 
-    const handleUploadFiles = async (files: File[]) => {
-        if (files.length === 0) return;
+    const selectedFolder = assetFolders.find(f => f.id === selectedFolderId) || null;
 
-        // Mixed-MIME rejection (per plan decision).
-        const mimes = new Set(files.map(f => f.type));
-        const allowedMimes = [...mimes].filter(m => ALLOWED.includes(m as AssetMimeType));
-        const disallowed = [...mimes].filter(m => !ALLOWED.includes(m as AssetMimeType));
-        if (disallowed.length > 0) {
-            setErrorMsg(`Rejected — unsupported types: ${disallowed.join(', ')}. Allowed: SVG, PNG, JPEG.`);
-            return;
+    // Some browsers (and the drag-and-drop FileSystem API) leave file.type empty for SVGs,
+    // so fall back to the extension before deciding a file is unsupported.
+    const effectiveMime = (file: File): string => {
+        if (isAllowedMime(file.type)) return file.type;
+        const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+        const byExt: Record<string, AssetMimeType> = {
+            svg: 'image/svg+xml',
+            png: 'image/png',
+            jpg: 'image/jpeg',
+            jpeg: 'image/jpeg',
+        };
+        return byExt[ext] ?? file.type;
+    };
+
+    // Split a target's files into what we can upload and what we skip. Unsupported files
+    // (e.g. .DS_Store, a stray README) are dropped silently-ish and reported as a notice.
+    // A genuine SVG+raster mix can't be auto-resolved, so it blocks that target with a why.
+    const filterTargetFiles = (
+        target: UploadTarget,
+    ): { usable: File[]; skippedCount: number; blockingError: string | null } => {
+        const usable: File[] = [];
+        let skippedCount = 0;
+        for (const file of target.files) {
+            if (isAllowedMime(effectiveMime(file))) usable.push(file);
+            else skippedCount += 1;
         }
-        if (allowedMimes.length > 1) {
-            setErrorMsg(`Rejected — mixed types (${allowedMimes.join(', ')}). A folder must be all-SVG or all-raster.`);
+
+        const usableMimes = new Set(usable.map(effectiveMime));
+        const hasSvg = usableMimes.has('image/svg+xml');
+        const hasRaster = usableMimes.has('image/png') || usableMimes.has('image/jpeg');
+        if (hasSvg && hasRaster) {
+            return {
+                usable: [],
+                skippedCount,
+                blockingError: `Can't import "${target.label}" — it mixes SVG and raster (PNG/JPEG) images. An asset folder must be all-SVG or all-raster, so split them into separate folders and try again.`,
+            };
+        }
+
+        return { usable, skippedCount, blockingError: null };
+    };
+
+    const uniqueFolderName = (baseName: string, reservedNames: Set<string>) => {
+        const clean = baseName.trim() || 'Imported Assets';
+        const existing = new Set([
+            ...useStore.getState().assetFolders.map(f => f.name.toLowerCase()),
+            ...[...reservedNames].map(name => name.toLowerCase()),
+        ]);
+        if (!existing.has(clean.toLowerCase())) {
+            reservedNames.add(clean);
+            return clean;
+        }
+
+        let index = 2;
+        let next = `${clean} ${index}`;
+        while (existing.has(next.toLowerCase())) {
+            index += 1;
+            next = `${clean} ${index}`;
+        }
+        reservedNames.add(next);
+        return next;
+    };
+
+    const buildUploadTargets = (pickedFiles: PickedAssetFile[]): UploadTarget[] => {
+        const directFiles: File[] = [];
+        const folderFiles = new Map<string, File[]>();
+
+        for (const item of pickedFiles) {
+            const relativePath = normalizeAssetPath(item.relativePath);
+            const parts = relativePath.split('/').filter(Boolean);
+            if (parts.length > 1) {
+                const folderName = parts[0];
+                folderFiles.set(folderName, [...(folderFiles.get(folderName) || []), item.file]);
+            } else {
+                directFiles.push(item.file);
+            }
+        }
+
+        const targets: UploadTarget[] = [];
+        if (directFiles.length > 0) {
+            targets.push({
+                kind: 'existing-folder',
+                folderId: selectedFolderId,
+                label: selectedFolder ? selectedFolder.name : 'Unfiled',
+                files: directFiles,
+            });
+        }
+
+        const reservedNames = new Set<string>();
+        for (const [folderName, files] of folderFiles) {
+            const uniqueName = uniqueFolderName(folderName, reservedNames);
+            targets.push({
+                kind: 'new-folder',
+                folderName: uniqueName,
+                label: uniqueName,
+                files,
+            });
+        }
+
+        return targets;
+    };
+
+    const handleUploadTargets = async (targets: UploadTarget[]) => {
+        if (targets.length === 0) return;
+
+        // Filter each target: keep usable files, tally skips, and bail only on a real
+        // SVG+raster conflict (which we can't resolve for the user).
+        const uploadable: UploadTarget[] = [];
+        let totalSkipped = 0;
+        for (const target of targets) {
+            const { usable, skippedCount, blockingError } = filterTargetFiles(target);
+            if (blockingError) {
+                setNoticeMsg(null);
+                setErrorMsg(blockingError);
+                return;
+            }
+            totalSkipped += skippedCount;
+            if (usable.length > 0) uploadable.push({ ...target, files: usable });
+        }
+
+        const skipNote = totalSkipped > 0
+            ? `Skipped ${totalSkipped} incompatible file${totalSkipped === 1 ? '' : 's'} (allowed: SVG, PNG, JPEG).`
+            : null;
+
+        if (uploadable.length === 0) {
+            setNoticeMsg(null);
+            setErrorMsg(skipNote
+                ? `${skipNote} Nothing left to upload.`
+                : 'Nothing to upload.');
             return;
         }
 
         setErrorMsg(null);
-        const queue: UploadState[] = files.map(f => ({ status: 'pending', name: f.name }));
+        setNoticeMsg(skipNote);
+        targets = uploadable;
+        const queue: UploadState[] = targets.flatMap(target =>
+            target.files.map(file => ({ status: 'pending', name: `${target.label}/${file.name}` })),
+        );
         setUploads(queue);
 
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            setUploads(u => u.map((s, idx) => idx === i ? { status: 'uploading', name: file.name } : s));
-            try {
-                const result = await uploadAsset(selectedFolderId, file);
-                setUploads(u => u.map((s, idx) => idx === i
-                    ? (result ? { status: 'done', name: file.name } : { status: 'error', name: file.name, reason: 'upload failed' })
-                    : s));
-            } catch (e) {
-                const msg = e instanceof Error ? e.message : 'upload failed';
-                setUploads(u => u.map((s, idx) => idx === i ? { status: 'error', name: file.name, reason: msg } : s));
+        let queueIndex = 0;
+        let firstCreatedFolderId: string | null = null;
+
+        for (const target of targets) {
+            let targetFolderId = target.kind === 'existing-folder' ? target.folderId : null;
+
+            if (target.kind === 'new-folder') {
+                targetFolderId = await createAssetFolder(target.folderName) ?? null;
+                if (!targetFolderId) {
+                    for (let i = 0; i < target.files.length; i++) {
+                        const idx = queueIndex + i;
+                        setUploads(u => u.map((s, stateIdx) => stateIdx === idx
+                            ? { status: 'error', name: s.name, reason: 'folder creation failed' }
+                            : s));
+                    }
+                    queueIndex += target.files.length;
+                    continue;
+                }
+                firstCreatedFolderId ??= targetFolderId;
+            }
+
+            for (const file of target.files) {
+                const idx = queueIndex;
+                const displayName = `${target.label}/${file.name}`;
+                setUploads(u => u.map((s, stateIdx) => stateIdx === idx ? { status: 'uploading', name: displayName } : s));
+                try {
+                    const result = await uploadAsset(targetFolderId, file);
+                    setUploads(u => u.map((s, stateIdx) => stateIdx === idx
+                        ? (result ? { status: 'done', name: displayName } : { status: 'error', name: displayName, reason: 'upload failed' })
+                        : s));
+                } catch (e) {
+                    const msg = e instanceof Error ? e.message : 'upload failed';
+                    setUploads(u => u.map((s, stateIdx) => stateIdx === idx ? { status: 'error', name: displayName, reason: msg } : s));
+                }
+                queueIndex += 1;
             }
         }
+
+        if (firstCreatedFolderId) setSelectedFolderId(firstCreatedFolderId);
 
         // Auto-clear completed upload list after a brief delay.
         setTimeout(() => setUploads([]), 3000);
     };
 
+    const handleUploadPickedFiles = async (pickedFiles: PickedAssetFile[]) => {
+        const targets = buildUploadTargets(pickedFiles);
+        await handleUploadTargets(targets);
+    };
+
     const handleDrop = async (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragOver(false);
-        const files = Array.from(e.dataTransfer.files).filter(f => f.size > 0);
-        await handleUploadFiles(files);
+        const files = await readDroppedAssetFiles(e.dataTransfer);
+        await handleUploadPickedFiles(files);
     };
 
     const handleDragOver = (e: React.DragEvent) => {
@@ -260,8 +507,14 @@ const AssetLibrary: React.FC = () => {
     };
 
     const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const files = Array.from(e.target.files || []);
-        await handleUploadFiles(files);
+        const files = Array.from(e.target.files || []).map(fileToPickedAssetFile);
+        await handleUploadPickedFiles(files);
+        e.target.value = '';
+    };
+
+    const handleFolderPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files || []).map(fileToPickedAssetFile);
+        await handleUploadPickedFiles(files);
         e.target.value = '';
     };
 
@@ -269,8 +522,6 @@ const AssetLibrary: React.FC = () => {
         const id = await createAssetFolder('New Folder');
         if (id) setSelectedFolderId(id);
     };
-
-    const selectedFolder = assetFolders.find(f => f.id === selectedFolderId) || null;
 
     return (
         <div className="flex-1 flex flex-col min-h-0">
@@ -322,12 +573,22 @@ const AssetLibrary: React.FC = () => {
                 <span className="text-[10px] uppercase tracking-widest text-white/40 truncate">
                     {selectedFolder ? selectedFolder.name : 'Unfiled'}
                 </span>
-                <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors"
-                >
-                    <Upload size={11} /> Upload
-                </button>
+                <div className="flex items-center gap-1">
+                    <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+                        title="Upload files to the selected folder"
+                    >
+                        <Upload size={11} /> Files
+                    </button>
+                    <button
+                        onClick={() => folderInputRef.current?.click()}
+                        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+                        title="Import a folder as a new asset folder"
+                    >
+                        <FolderUp size={11} /> Folder
+                    </button>
+                </div>
                 <input
                     ref={fileInputRef}
                     type="file"
@@ -335,6 +596,15 @@ const AssetLibrary: React.FC = () => {
                     accept=".svg,.png,.jpg,.jpeg,image/svg+xml,image/png,image/jpeg"
                     className="hidden"
                     onChange={handleFilePick}
+                />
+                <input
+                    ref={folderInputRef}
+                    type="file"
+                    multiple
+                    accept=".svg,.png,.jpg,.jpeg,image/svg+xml,image/png,image/jpeg"
+                    className="hidden"
+                    onChange={handleFolderPick}
+                    {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
                 />
             </div>
 
@@ -344,6 +614,13 @@ const AssetLibrary: React.FC = () => {
                     <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
                     <span className="flex-1">{errorMsg}</span>
                     <button onClick={() => setErrorMsg(null)} className="text-red-300/70 hover:text-red-200">×</button>
+                </div>
+            )}
+            {noticeMsg && (
+                <div className="mx-2 mb-2 flex items-start gap-2 p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[10px]">
+                    <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
+                    <span className="flex-1">{noticeMsg}</span>
+                    <button onClick={() => setNoticeMsg(null)} className="text-amber-300/70 hover:text-amber-200">×</button>
                 </div>
             )}
             {uploads.length > 0 && (
