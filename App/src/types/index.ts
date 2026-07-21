@@ -237,6 +237,14 @@ export interface LayerConfig {
     loopIndependently?: boolean;
     persistVisible?: boolean; // New: Keep visible after end
 
+    // Sequenced fade-in: reveal the primary instances (instances / asset-set folder
+    // items) one-by-one when playback reaches this layer. Two independent controls:
+    // stagger = delay between each instance starting; duration = how long each single
+    // instance takes to fade (may exceed the stagger so fades overlap smoothly).
+    sequencedFadeInEnabled?: boolean;
+    sequencedFadeInStagger?: number; // seconds between the start of consecutive instances
+    sequencedFadeInDuration?: number; // seconds for a single instance to fade 0 -> 1
+
     // Group Style Overrides
     styleOverrideEnabled?: boolean;
 }

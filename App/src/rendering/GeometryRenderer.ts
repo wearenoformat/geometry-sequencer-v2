@@ -601,7 +601,8 @@ export class GeometryRenderer {
                         radiusOffset: number, offsetMult: number,
                         radialArc: number, alignToPath: boolean,
                         instanceRotation: number, instanceRotationMult: number
-                    }
+                    },
+                    perInstanceAlpha?: (index: number, count: number) => number
                 ) => {
                     const container = this.getContainer();
                     const arc = params.radialArc || 360;
@@ -622,6 +623,7 @@ export class GeometryRenderer {
                             child.rotation += positionAngle;
                         }
                         child.rotation += (i * params.instanceRotation * rotationProgressive) * (Math.PI / 180);
+                        if (perInstanceAlpha) child.alpha *= perInstanceAlpha(i, count);
                         container.addChild(child);
                     }
                     return container;
@@ -632,6 +634,30 @@ export class GeometryRenderer {
                     : layer.type === 'iching_lines' ? 64
                     : layer.type === 'asset_set' ? Math.max(1, assetFolderAssets.length)
                     : Math.max(1, layer.config.instances);
+
+                // Sequenced fade-in: reveal the primary instances one after another.
+                // Instance i STARTS fading at i*stagger and takes `fadeLen` seconds to
+                // reach full opacity — so when fadeLen > stagger the fades overlap and the
+                // reveal reads as a smooth wave. Gated on isPlaying so paused/scrubbing
+                // shows every instance (mirrors the layer-level fade above).
+                //
+                // Progress is shaped with smoothstep (ease-in-out) rather than left linear:
+                // a linear alpha ramp on bright shapes over a dark stage looks "arrived" by
+                // ~15-20% opacity (perceived brightness ~= alpha^0.45), so a longer Fade is
+                // barely perceptible. Smoothstep keeps the instance genuinely dim early and
+                // eases it up, so the Fade value actually controls how gradual each entrance
+                // feels.
+                const seqStagger = layer.config.sequencedFadeInStagger ?? 0.2;
+                const seqFadeLen = layer.config.sequencedFadeInDuration ?? 0.5;
+                const seqFade = (layer.config.sequencedFadeInEnabled && seqFadeLen > 0 && isPlaying)
+                    ? (index: number): number => {
+                        const local = (activeTime - layer.timeline.start) - index * seqStagger;
+                        const p = local / seqFadeLen;
+                        if (p <= 0) return 0;
+                        if (p >= 1) return 1;
+                        return p * p * (3 - 2 * p); // smoothstep
+                    }
+                    : undefined;
                 const params1 = {
                     spacingX: currentSpacingX,
                     spacingY: currentSpacingY,
@@ -660,7 +686,7 @@ export class GeometryRenderer {
                 };
 
                 const createLevel1 = (_idx2: number, _prog2: number) => {
-                    return createInstanceGroup((idx1, prog1) => createInnerShape(idx1, prog1), count1, params1);
+                    return createInstanceGroup((idx1, prog1) => createInnerShape(idx1, prog1), count1, params1, seqFade);
                 };
 
                 if (count2 > 1) {
