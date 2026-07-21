@@ -1346,7 +1346,7 @@ const Inspector: React.FC = () => {
                                     <div className="text-[9px] uppercase font-bold text-white/30 tracking-wider mb-1.5">Radial Layout</div>
                                     <div className="grid grid-cols-2 gap-2">
                                         <ControlSlider label="Radius" tooltip="Distance of each instance from the layer's center" value={getAnimValue('orbitRadius')} icon={<Timer size={12} />} onChange={(v: number, skip?: boolean) => setAnimValue('orbitRadius', v, skip)} disabled={!activeKeyframe} />
-                                        <ControlSlider label="Arc" tooltip="Total angle swept across all instances (degrees; negative reverses direction)" value={activeLayer.config.radialArc ?? 360} min={-360} max={360} onChange={(v: number, skip?: boolean) => setConfigValue('radialArc', v, skip)} isFixed />
+                                        <ControlSlider label="Arc" tooltip="Total angle swept across all instances (degrees; negative reverses direction). Animatable — set a value per keyframe to spread/contract the ring over time" value={getAnimValue('radialArc')} min={-360} max={360} onChange={(v: number, skip?: boolean) => setAnimValue('radialArc', v, skip)} disabled={!activeKeyframe} />
                                     </div>
                                     <div className="grid grid-cols-2 gap-2 mt-1 items-center">
                                         <ControlSlider label="Start" tooltip="Starting angle of the first instance (degrees)" value={getAnimValue('rotateOrbit')} icon={<Shuffle size={12} />} onChange={(v: number, skip?: boolean) => setAnimValue('rotateOrbit', v, skip)} disabled={!activeKeyframe} />
@@ -1412,7 +1412,7 @@ const Inspector: React.FC = () => {
                                                 <div className="text-[9px] uppercase font-bold text-white/30 tracking-wider mb-1.5">Radial Layout</div>
                                                 <div className="grid grid-cols-2 gap-2">
                                                     <ControlSlider label="Radius" tooltip="Distance of each instance from the layer's center" value={getAnimValue('orbitRadius2')} icon={<Timer size={12} />} onChange={(v: number, skip?: boolean) => setAnimValue('orbitRadius2', v, skip)} disabled={!activeKeyframe} />
-                                                    <ControlSlider label="Arc" tooltip="Total angle swept across all instances (degrees; negative reverses direction)" value={activeLayer.config.radialArc2 ?? 360} min={-360} max={360} onChange={(v: number, skip?: boolean) => setConfigValue('radialArc2', v, skip)} isFixed />
+                                                    <ControlSlider label="Arc" tooltip="Total angle swept across all instances (degrees; negative reverses direction). Animatable — set a value per keyframe to spread/contract the ring over time" value={getAnimValue('radialArc2')} min={-360} max={360} onChange={(v: number, skip?: boolean) => setAnimValue('radialArc2', v, skip)} disabled={!activeKeyframe} />
                                                 </div>
                                                 <div className="grid grid-cols-2 gap-2 mt-1 items-center">
                                                     <ControlSlider label="Start" tooltip="Starting angle of the first instance (degrees)" value={getAnimValue('rotateOrbit2')} icon={<Shuffle size={12} />} onChange={(v: number, skip?: boolean) => setAnimValue('rotateOrbit2', v, skip)} disabled={!activeKeyframe} />

@@ -639,7 +639,8 @@ export class GeometryRenderer {
                     rotateOrbit: currentProps.rotateOrbit ?? 0,
                     radiusOffset: currentRadiusOffset,
                     offsetMult: currentOffsetMult,
-                    radialArc: layer.config.radialArc,
+                    // Animatable, falling back to the legacy config value then a full ring.
+                    radialArc: currentProps.radialArc ?? layer.config.radialArc ?? 360,
                     alignToPath: layer.config.alignToPath,
                     instanceRotation: currentInstanceRotation,
                     instanceRotationMult: currentInstanceRotationMult
@@ -653,7 +654,8 @@ export class GeometryRenderer {
                     rotateOrbit: currentRotateOrbit2,
                     radiusOffset: currentRadiusOffset2,
                     offsetMult: currentOffsetMult2,
-                    radialArc: layer.config.radialArc2,
+                    // Animatable, falling back to the legacy config value then a full ring.
+                    radialArc: currentProps.radialArc2 ?? layer.config.radialArc2 ?? 360,
                     alignToPath: layer.config.alignToPath2,
                     instanceRotation: currentInstanceRotation2,
                     instanceRotationMult: currentInstanceRotationMult2

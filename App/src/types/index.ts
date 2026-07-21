@@ -144,6 +144,8 @@ export interface AnimatableProperties {
     // Config animatables
     shapeArc: number;
     starInnerRadius: number;
+    radialArc: number; // instance orbit spread, 0-360 (level 1)
+    radialArc2: number; // instance orbit spread, 0-360 (level 2 / recursive)
 
     // Advanced Filters
     // Advanced Bloom

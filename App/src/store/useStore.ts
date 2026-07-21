@@ -236,6 +236,34 @@ const migrateLegacyAnimationLayer = (layer: any): Layer => {
     } as Layer;
 };
 
+// radialArc / radialArc2 were promoted from layer.config to animatable keyframe
+// properties. Keyframes authored before the promotion don't carry them, and a
+// missing key interpolates toward 0 (see interpolateValues) — which would collapse
+// the ring. Seed each keyframe from the layer's config value (defaulting to a full
+// 360 ring) so existing projects keep their arc and interpolation stays stable.
+const seedPromotedAnimatables = (layer: Layer): Layer => {
+    if (!layer.keyframes?.length) return layer;
+    const cfg = layer.config as any;
+    const arc = cfg?.radialArc ?? 360;
+    const arc2 = cfg?.radialArc2 ?? 360;
+
+    let changed = false;
+    const keyframes = layer.keyframes.map(kf => {
+        const value = kf.value as any;
+        if (value?.radialArc !== undefined && value?.radialArc2 !== undefined) return kf;
+        changed = true;
+        return {
+            ...kf,
+            value: {
+                ...value,
+                radialArc: value?.radialArc ?? arc,
+                radialArc2: value?.radialArc2 ?? arc2,
+            },
+        };
+    });
+    return changed ? { ...layer, keyframes } : layer;
+};
+
 const normalizeProjectForV2 = (
     projectData: Project,
     seedFoldersByName: Map<string, string>
@@ -245,21 +273,22 @@ const normalizeProjectForV2 = (
     return {
         ...projectData,
         layers: projectData.layers.map((rawLayer: any) => {
-            const layer = migrateLegacyAnimationLayer(rawLayer);
-            const seedName = LEGACY_TYPE_TO_SEED_FOLDER[layer.type];
-            if (!seedName) return layer;
+            const migrated = migrateLegacyAnimationLayer(rawLayer);
+            const seedName = LEGACY_TYPE_TO_SEED_FOLDER[migrated.type];
+            const folderId = seedName ? seedFoldersByName.get(seedName) : undefined;
 
-            const folderId = seedFoldersByName.get(seedName);
-            if (!folderId) return layer;
+            const layer: Layer = folderId
+                ? ({
+                    ...migrated,
+                    type: 'asset_set',
+                    config: {
+                        ...migrated.config,
+                        assetFolderId: folderId,
+                    },
+                } as Layer)
+                : migrated;
 
-            return {
-                ...layer,
-                type: 'asset_set',
-                config: {
-                    ...layer.config,
-                    assetFolderId: folderId,
-                },
-            } as Layer;
+            return seedPromotedAnimatables(layer);
         }),
     };
 };
