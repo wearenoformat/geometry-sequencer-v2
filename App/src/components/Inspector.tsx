@@ -1341,6 +1341,41 @@ const Inspector: React.FC = () => {
                                     disabled={activeLayer?.type === 'astrology' || activeLayer?.type === 'amino' || activeLayer?.type === 'iching_lines' || activeLayer?.type === 'asset_set'}
                                 />
 
+                                {/* SEQUENCED FADE-IN */}
+                                <div className="mt-3 pt-2 border-t border-white/5">
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <div className="text-[9px] uppercase font-bold text-white/30 tracking-wider">Sequenced Fade-In</div>
+                                        <ModernToggle
+                                            checked={activeLayer.config.sequencedFadeInEnabled ?? false}
+                                            onChange={(val, skip?: boolean) => setConfigValue('sequencedFadeInEnabled', val, skip)}
+                                            label="ON"
+                                            tooltip="Reveal instances one-by-one in sequence when playback reaches this layer"
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <ControlSlider
+                                            label="Stagger"
+                                            tooltip="Delay (seconds) between each instance starting to fade in — controls how spread out the sequence is"
+                                            value={activeLayer.config.sequencedFadeInStagger ?? 0.2}
+                                            min={0} max={10} step={0.05}
+                                            icon={<Shuffle size={12} />}
+                                            onChange={(v: number, skip?: boolean) => setConfigValue('sequencedFadeInStagger', v, skip)}
+                                            isFixed
+                                            disabled={!(activeLayer.config.sequencedFadeInEnabled ?? false)}
+                                        />
+                                        <ControlSlider
+                                            label="Fade"
+                                            tooltip="How long (seconds) each single instance takes to fade in — exceed the stagger for overlapping, smoother reveals"
+                                            value={activeLayer.config.sequencedFadeInDuration ?? 0.5}
+                                            min={0.05} max={20} step={0.05}
+                                            icon={<Timer size={12} />}
+                                            onChange={(v: number, skip?: boolean) => setConfigValue('sequencedFadeInDuration', v, skip)}
+                                            isFixed
+                                            disabled={!(activeLayer.config.sequencedFadeInEnabled ?? false)}
+                                        />
+                                    </div>
+                                </div>
+
                                 {/* RADIAL LAYOUT */}
                                 <div className="mt-3 pt-2 border-t border-white/5">
                                     <div className="text-[9px] uppercase font-bold text-white/30 tracking-wider mb-1.5">Radial Layout</div>
