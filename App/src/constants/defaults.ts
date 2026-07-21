@@ -41,6 +41,8 @@ export const DEFAULT_ANIMATABLES: AnimatableProperties = {
     instanceRotationMult2: 0,
     shapeArc: 360,
     starInnerRadius: 0.5,
+    radialArc: 360,
+    radialArc2: 360,
     glowStrength: 0,
     noise: 0,
     displacementScale: 0,
