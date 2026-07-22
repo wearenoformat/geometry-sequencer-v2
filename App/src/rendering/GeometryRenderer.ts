@@ -753,11 +753,14 @@ export class GeometryRenderer {
                 if (!needsSplit) {
                     const content = buildContent(rotationDeg, xVal, yVal);
                     wrapper.addChild(content);
-                    // Asset layers (SVG/PNG) paint their own gradient internally
-                    // via svgRecolor's injected <linearGradient>, so the masked
-                    // overlay is both redundant and renders as a full square over
-                    // the icon. Only primitives use the overlay gradient path.
-                    if (hasGradient && !isAsset) addGradientMaskedBy(content);
+                    // Single gradient across the WHOLE layer: one full-frame
+                    // gradient sprite masked by the combined content (all elements
+                    // and all instances at once), not per-element. Applies to
+                    // assets too — the recolored SVG underneath just serves as the
+                    // opaque mask silhouette. (The earlier "square" here was the
+                    // bug-2 shared-context corruption masking to primitive geometry;
+                    // with that fixed the overlay clips to the real shape again.)
+                    if (hasGradient) addGradientMaskedBy(content);
                     return wrapper;
                 }
 
