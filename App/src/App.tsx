@@ -107,7 +107,12 @@ const App: React.FC = () => {
 
       if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
         const urlProjectId = new URLSearchParams(window.location.search).get('p');
-        if (session && urlProjectId) {
+        // NOTE: onAuthStateChange re-fires SIGNED_IN on tab refocus and on
+        // periodic token refresh — not only on a real login. The URL keeps
+        // ?p=<id> while editing, so without the id guard below every tab
+        // switch reloads the project from the server and silently discards
+        // unsaved edits. Only load when it isn't already the open project.
+        if (session && urlProjectId && useStore.getState().project?.id !== urlProjectId) {
           useStore.getState().loadProject(urlProjectId, 'editor');
           return;
         }
