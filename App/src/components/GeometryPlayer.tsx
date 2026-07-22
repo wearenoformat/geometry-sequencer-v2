@@ -13,6 +13,10 @@ interface GeometryPlayerProps {
     backgroundColor?: string;
     onTick?: (deltaTime: number) => void;
     disableTicker?: boolean;
+    /** When true the wrapper is transparent, so a letterboxed canvas reveals
+     *  whatever is behind it (e.g. the editor's checkerboard). Off by default
+     *  so exports / thumbnails keep the solid background. */
+    letterboxTransparent?: boolean;
 }
 
 const GeometryPlayer: React.FC<GeometryPlayerProps> = ({
@@ -23,7 +27,8 @@ const GeometryPlayer: React.FC<GeometryPlayerProps> = ({
     isPlaying,
     backgroundColor = '#000000',
     onTick,
-    disableTicker = false
+    disableTicker = false,
+    letterboxTransparent = false
 }) => {
     const appRef = useRef<Application | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -131,7 +136,7 @@ const GeometryPlayer: React.FC<GeometryPlayerProps> = ({
     }, [project, currentTime, isPlaying]);
 
 
-    return <div ref={containerRef} style={{ width: '100%', height: '100%', overflow: 'hidden', background: backgroundColor }} />;
+    return <div ref={containerRef} style={{ width: '100%', height: '100%', overflow: 'hidden', background: letterboxTransparent ? 'transparent' : backgroundColor }} />;
 };
 
 export default GeometryPlayer;

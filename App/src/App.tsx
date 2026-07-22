@@ -160,7 +160,7 @@ const App: React.FC = () => {
         {/* Left Column: Canvas + Timeline */}
         <div className="flex-1 flex flex-col min-w-0 border-r border-white/10 min-h-0 relative z-0">
           <div className="flex-1 relative bg-black min-h-0 overflow-hidden">
-            <GeometryCanvas />
+            <GeometryCanvas framed />
             <TooltipOverlay />
           </div>
 

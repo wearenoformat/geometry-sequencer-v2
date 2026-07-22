@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '../supabaseClient';
 import type { AppState, Project, Layer, LayerKeyframe, ProjectMetadata, Folder, ExportSettings, Keyframe, AssetFolder, Asset, AssetMimeType } from '../types';
 import { DEFAULT_ANIMATABLES } from '../constants/defaults';
+import { CROP_STORAGE_KEY } from '../components/cropPreview';
 import { sanitizeSvgFile } from '../utils/sanitizeSvg';
 import { optimizeAsset } from '../utils/assetOptimizer';
 import { captureThumbnail } from '../utils/thumbnailGenerator';
@@ -359,6 +360,11 @@ export const useStore = create<AppState>((set, get) => {
             set({ session: null, user: null, savedProjects: [], folders: [], assetFolders: [], assetsByFolder: {}, projectThumbnails: {} });
         },
         exportSettings: { width: 1080, height: 1080, isActive: false, pixelRatio: 1 },
+        editorPreviewCrop: (typeof window !== 'undefined' && window.localStorage.getItem(CROP_STORAGE_KEY)) || 'full',
+        setEditorPreviewCrop: (id: string) => {
+            set({ editorPreviewCrop: id });
+            try { window.localStorage.setItem(CROP_STORAGE_KEY, id); } catch { /* ignore */ }
+        },
         currentTime: 0,
         isPlaying: false,
         isLooping: true, // Default to true

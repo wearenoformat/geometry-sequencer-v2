@@ -368,6 +368,7 @@ export interface AppState {
     clipboardLayers: Layer[];
     clipboardKeyframe: Keyframe<any> | null; // Changed from clipboardKeyState which was complex
     exportSettings: ExportSettings;
+    editorPreviewCrop: string; // editor-only preview crop id (see components/cropPreview)
 
     saveIndex: () => Promise<void>;
 
@@ -429,5 +430,6 @@ export interface AppState {
     deleteProject: (id: string) => Promise<void>;
     setSavedProjects: (projects: ProjectMetadata[]) => void;
     setExportSettings: (settings: ExportSettings) => void;
+    setEditorPreviewCrop: (id: string) => void;
     restyleAllLayers: () => void;
 }
