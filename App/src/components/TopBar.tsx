@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Save, Menu, ChevronDown, Copy, Trash2, Edit2, Settings, User as UserIcon, LogOut, Share2, Link2, Camera, FileCode } from 'lucide-react';
+import { Save, Menu, ChevronDown, Copy, Trash2, Edit2, Settings, User as UserIcon, LogOut, Share2, Link2, Camera, FileCode, Crop } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import AuthModal from './AuthModal';
 import ExportModal from './ExportModal';
 import { exportStageToSVG, downloadSVG } from '../utils/svgExport';
+import { CROP_OPTIONS, getCropOption } from './cropPreview';
 const TopBar: React.FC = () => {
     const project = useStore(s => s.project);
     const duplicateProject = useStore(s => s.duplicateProject);
@@ -14,6 +15,9 @@ const TopBar: React.FC = () => {
     const setActiveLayerId = useStore(s => s.setActiveLayerId);
     const user = useStore(s => s.user);
     const signOut = useStore(s => s.signOut);
+    const editorPreviewCrop = useStore(s => s.editorPreviewCrop);
+    const setEditorPreviewCrop = useStore(s => s.setEditorPreviewCrop);
+    const activeCrop = getCropOption(editorPreviewCrop);
 
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -221,6 +225,50 @@ const TopBar: React.FC = () => {
                             </button>
                         </div>
                     )}
+                </div>
+
+                <div className="h-6 w-px bg-white/10" />
+
+                {/* Preview Crop (editor-only; hover to reveal proportions) */}
+                <div className="relative group">
+                    <button
+                        className="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-white/10 transition-colors text-white/60 hover:text-white"
+                        title="Preview crop — reframes the editor only, never the export"
+                    >
+                        <Crop size={14} className="text-[#D4AF37]" />
+                        <span className="text-[10px] uppercase font-bold tracking-widest">{activeCrop.label}</span>
+                        <ChevronDown size={12} className="text-white/30" />
+                    </button>
+
+                    {/* pt-2 is a transparent hover bridge so the menu doesn't close between button and popover */}
+                    <div className="absolute top-full right-0 pt-2 opacity-0 invisible translate-y-1 group-hover:opacity-100 group-hover:visible group-hover:translate-y-0 transition-all duration-150 z-50">
+                        <div className="bg-[#2a2a2a] border border-white/10 rounded shadow-2xl p-1 flex flex-col gap-0.5 min-w-[130px]">
+                            <div className="px-2 py-1 text-[9px] uppercase tracking-widest text-white/30">Preview Crop</div>
+                            {CROP_OPTIONS.map((c) => {
+                                const isActive = c.id === editorPreviewCrop;
+                                // Small proportion glyph (max 14px on the long edge).
+                                const gw = c.ratio >= 1 ? 14 : 14 * c.ratio;
+                                const gh = c.ratio >= 1 ? 14 / c.ratio : 14;
+                                return (
+                                    <button
+                                        key={c.id}
+                                        onClick={() => setEditorPreviewCrop(c.id)}
+                                        className={`flex items-center gap-3 px-2 py-1.5 rounded text-[10px] uppercase tracking-widest font-bold transition-colors ${
+                                            isActive ? 'bg-[#D4AF37] text-black' : 'text-white/60 hover:text-white hover:bg-white/5'
+                                        }`}
+                                    >
+                                        <span className="w-4 h-4 flex items-center justify-center shrink-0">
+                                            <span
+                                                className={`rounded-[1px] ${isActive ? 'bg-black/70' : 'bg-white/40'}`}
+                                                style={{ width: gw, height: gh }}
+                                            />
+                                        </span>
+                                        {c.label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
                 </div>
 
                 <div className="h-6 w-px bg-white/10" />
