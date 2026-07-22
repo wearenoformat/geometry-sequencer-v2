@@ -1576,7 +1576,7 @@ const Inspector: React.FC = () => {
                         <SectionHeader title="GLOBAL ROTATION" expanded={expandedSections.globalRotation} onToggle={() => toggleSection('globalRotation')} />
                         {expandedSections.globalRotation && (
                             <div className="p-3">
-                                <ControlSlider label="Global Rotate" value={getAnimValue('rotateLayer')} min={0} max={720} onChange={(v: number, skip?: boolean) => setAnimValue('rotateLayer', v, skip)} disabled={!activeKeyframe} />
+                                <ControlSlider label="Global Rotate" value={getAnimValue('rotateLayer')} min={-720} max={720} onChange={(v: number, skip?: boolean) => setAnimValue('rotateLayer', v, skip)} disabled={!activeKeyframe} />
                             </div>
                         )}
                     </div>
