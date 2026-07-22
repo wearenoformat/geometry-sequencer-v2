@@ -1029,6 +1029,8 @@ const Inspector: React.FC = () => {
                                         };
                                         // Keep the legacy gradientEnabled flag in sync with the new per-target
                                         // flags so any code still reading it sees "on if either is on".
+                                        const strokeOn = cfg.strokeEnabled ?? true;
+                                        const fillOn = cfg.fillEnabled ?? false;
                                         const writeMode = (target: 'stroke' | 'fill', useGradient: boolean) => {
                                             const nextStroke = target === 'stroke' ? useGradient : strokeGrad;
                                             const nextFill = target === 'fill' ? useGradient : fillGrad;
@@ -1037,7 +1039,9 @@ const Inspector: React.FC = () => {
                                                 strokeGradientEnabled: nextStroke,
                                                 fillGradientEnabled: nextFill,
                                                 gradientEnabled: nextStroke || nextFill,
-                                                strokeEnabled: true,
+                                                // Only the target being edited is guaranteed enabled — don't
+                                                // force the other paint on (would undo a Stroke/Fill toggle-off).
+                                                [target === 'stroke' ? 'strokeEnabled' : 'fillEnabled']: true,
                                             };
                                             if (useGradient) ensureStops(patch);
                                             updateLayer(activeLayer.id, { config: patch });
@@ -1082,14 +1086,26 @@ const Inspector: React.FC = () => {
 
                                         return (
                                             <>
-                                                {/* STROKE row */}
+                                                {/* STROKE row — toggle on the left enables the stroke paint;
+                                                    mode + swatch on the right appear only when enabled. Guard
+                                                    against turning both Stroke and Fill off (invisible shape) by
+                                                    forcing Fill on if it's the last paint standing. */}
                                                 <div className="flex items-center justify-between px-1">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-white/90 text-[10px] uppercase">Stroke</span>
-                                                        {renderModeToggle('stroke', strokeGrad)}
+                                                        <ModernToggle
+                                                            checked={strokeOn}
+                                                            onChange={(val, skip?: boolean) => {
+                                                                const patch: LayerConfig = { ...cfg, strokeEnabled: val };
+                                                                if (!val && !fillOn) patch.fillEnabled = true;
+                                                                updateLayer(activeLayer.id, { config: patch }, skip);
+                                                            }}
+                                                            label="Stroke"
+                                                            className={overridden ? "text-blue-400" : ""}
+                                                        />
+                                                        {strokeOn && renderModeToggle('stroke', strokeGrad)}
                                                         {overridden && <div className="text-[8px] text-blue-400 font-bold ml-1">OVERRIDDEN</div>}
                                                     </div>
-                                                    {strokeGrad ? renderGradientStrip('stroke') : (
+                                                    {strokeOn && (strokeGrad ? renderGradientStrip('stroke') : (
                                                         <CustomColorPicker
                                                             color={cfg.strokeColor || '#ffffff'}
                                                             onChange={(color) => {
@@ -1101,10 +1117,11 @@ const Inspector: React.FC = () => {
                                                             }}
                                                             className="w-4 h-4 border border-white/20 cursor-pointer rounded p-0"
                                                         />
-                                                    )}
+                                                    ))}
                                                 </div>
 
-                                                {/* WEIGHT + dash, grouped with Stroke. */}
+                                                {/* WEIGHT + dash, grouped with Stroke (hidden when stroke off). */}
+                                                {strokeOn && (
                                                 <div className="flex flex-col px-1 mt-1 pl-3 border-l border-white/5 ml-1">
                                                     <div className="flex items-center justify-between">
                                                         <span className="text-white/60 text-[10px] uppercase">Weight</span>
@@ -1132,18 +1149,20 @@ const Inspector: React.FC = () => {
                                                         </div>
                                                     )}
                                                 </div>
+                                                )}
 
                                                 {/* FILL row — toggle on the left enables the fill paint;
                                                     mode + swatch on the right appear only when enabled.
-                                                    Force strokeEnabled=true on toggle so the layer never
-                                                    becomes invisible if the user disables fill on an
-                                                    originally-fill-only shape (e.g. amino). */}
+                                                    Guard against turning both Fill and Stroke off (invisible
+                                                    shape) by forcing Stroke on if it's the last paint standing. */}
                                                 <div className="flex items-center justify-between px-1 mt-3">
                                                     <div className="flex items-center gap-2">
                                                         <ModernToggle
-                                                            checked={cfg.fillEnabled ?? false}
+                                                            checked={fillOn}
                                                             onChange={(val, skip?: boolean) => {
-                                                                updateLayer(activeLayer.id, { config: { ...cfg, fillEnabled: val, strokeEnabled: true } }, skip);
+                                                                const patch: LayerConfig = { ...cfg, fillEnabled: val };
+                                                                if (!val && !strokeOn) patch.strokeEnabled = true;
+                                                                updateLayer(activeLayer.id, { config: patch }, skip);
                                                             }}
                                                             label="Fill"
                                                             className={overridden ? "text-blue-400" : ""}
