@@ -102,7 +102,17 @@ export class GeometryRenderer {
         if (obj instanceof Sprite) {
             obj.destroy();
         } else if (obj instanceof Graphics) {
-            this.graphicsPool.push(obj);
+            // Graphics built from a cached, SHARED GraphicsContext (SVG assets,
+            // tagged below) must never re-enter the pool: getGraphics() calls
+            // clear() on reused instances, which delegates to the shared
+            // context and wipes the cached SVG geometry for every layer using
+            // that asset — shapes vanish or swap to whatever primitive is drawn
+            // next. Destroy this instance without touching the shared context.
+            if ((obj as any).__sharedContext) {
+                obj.destroy({ context: false, texture: false, textureSource: false });
+            } else {
+                this.graphicsPool.push(obj);
+            }
         } else if (obj instanceof Container) {
             obj.children.forEach(child => this.returnObject(child as Container | Graphics | Sprite));
             obj.removeChildren();
@@ -503,6 +513,10 @@ export class GeometryRenderer {
                                 : assetCache.getGraphicsContextSync(id);
                             if (!ctx) return wrapper; // source still fetching
                             const graphics = new Graphics(ctx);
+                            // Shares a cached context — flag so returnObject never
+                            // pools/clears it (see returnObject). Without this the
+                            // shared SVG geometry gets wiped on pool reuse.
+                            (graphics as any).__sharedContext = true;
                             const bounds = graphics.getLocalBounds();
                             const w = bounds.width;
                             const h = bounds.height;
@@ -739,7 +753,11 @@ export class GeometryRenderer {
                 if (!needsSplit) {
                     const content = buildContent(rotationDeg, xVal, yVal);
                     wrapper.addChild(content);
-                    if (hasGradient) addGradientMaskedBy(content);
+                    // Asset layers (SVG/PNG) paint their own gradient internally
+                    // via svgRecolor's injected <linearGradient>, so the masked
+                    // overlay is both redundant and renders as a full square over
+                    // the icon. Only primitives use the overlay gradient path.
+                    if (hasGradient && !isAsset) addGradientMaskedBy(content);
                     return wrapper;
                 }
 
