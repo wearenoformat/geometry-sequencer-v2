@@ -493,15 +493,28 @@ export class GeometryRenderer {
                         const mime = assetCache.getMimeType(id);
                         if (!mime) return wrapper; // metadata still loading
                         const targetMax = Math.max(Math.abs(rx), Math.abs(ry)) * 2; // full extent = diameter
+                        // When a gradient is active, the layer-wide gradient is painted
+                        // by the overlay sprite in createRenderableUnit, masked by this
+                        // SVG. So we DON'T inject the gradient into the SVG here — we
+                        // render its normal FLAT silhouette (identical to gradient-off
+                        // mode, which is known-good) purely as the mask shape. Injecting
+                        // the SVG gradient instead produced an opaque full-bounds mask on
+                        // some assets → the "gradient square". Injection off also avoids
+                        // the double / per-element gradient the injected path caused.
+                        const legacyGrad = effectiveConfig.gradientEnabled ?? false;
+                        const overlayGradient =
+                            ((effectiveConfig.strokeGradientEnabled ?? legacyGrad) ||
+                             (effectiveConfig.fillGradientEnabled ?? legacyGrad)) &&
+                            (effectiveConfig.gradientStops?.length ?? 0) > 0;
                         const recolorOpts: SvgRecolorOptions = {
                             fillEnabled: effectiveConfig.fillEnabled,
                             fillColor: effectiveConfig.fillColor,
                             strokeEnabled: effectiveConfig.strokeEnabled,
                             strokeColor: effectiveConfig.strokeColor,
-                            gradientEnabled: effectiveConfig.gradientEnabled,
-                            strokeGradientEnabled: effectiveConfig.strokeGradientEnabled,
-                            fillGradientEnabled: effectiveConfig.fillGradientEnabled,
-                            gradientStops: effectiveConfig.gradientStops,
+                            gradientEnabled: overlayGradient ? false : effectiveConfig.gradientEnabled,
+                            strokeGradientEnabled: overlayGradient ? false : effectiveConfig.strokeGradientEnabled,
+                            fillGradientEnabled: overlayGradient ? false : effectiveConfig.fillGradientEnabled,
+                            gradientStops: overlayGradient ? undefined : effectiveConfig.gradientStops,
                         };
                         const colorKey = buildColorKey(recolorOpts);
 
