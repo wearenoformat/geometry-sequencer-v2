@@ -102,7 +102,17 @@ export class GeometryRenderer {
         if (obj instanceof Sprite) {
             obj.destroy();
         } else if (obj instanceof Graphics) {
-            this.graphicsPool.push(obj);
+            // Graphics built from a cached, SHARED GraphicsContext (SVG assets,
+            // tagged below) must never re-enter the pool: getGraphics() calls
+            // clear() on reused instances, which delegates to the shared
+            // context and wipes the cached SVG geometry for every layer using
+            // that asset — shapes vanish or swap to whatever primitive is drawn
+            // next. Destroy this instance without touching the shared context.
+            if ((obj as any).__sharedContext) {
+                obj.destroy({ context: false, texture: false, textureSource: false });
+            } else {
+                this.graphicsPool.push(obj);
+            }
         } else if (obj instanceof Container) {
             obj.children.forEach(child => this.returnObject(child as Container | Graphics | Sprite));
             obj.removeChildren();
@@ -483,15 +493,28 @@ export class GeometryRenderer {
                         const mime = assetCache.getMimeType(id);
                         if (!mime) return wrapper; // metadata still loading
                         const targetMax = Math.max(Math.abs(rx), Math.abs(ry)) * 2; // full extent = diameter
+                        // When a gradient is active, the layer-wide gradient is painted
+                        // by the overlay sprite in createRenderableUnit, masked by this
+                        // SVG. So we DON'T inject the gradient into the SVG here — we
+                        // render its normal FLAT silhouette (identical to gradient-off
+                        // mode, which is known-good) purely as the mask shape. Injecting
+                        // the SVG gradient instead produced an opaque full-bounds mask on
+                        // some assets → the "gradient square". Injection off also avoids
+                        // the double / per-element gradient the injected path caused.
+                        const legacyGrad = effectiveConfig.gradientEnabled ?? false;
+                        const overlayGradient =
+                            ((effectiveConfig.strokeGradientEnabled ?? legacyGrad) ||
+                             (effectiveConfig.fillGradientEnabled ?? legacyGrad)) &&
+                            (effectiveConfig.gradientStops?.length ?? 0) > 0;
                         const recolorOpts: SvgRecolorOptions = {
                             fillEnabled: effectiveConfig.fillEnabled,
                             fillColor: effectiveConfig.fillColor,
                             strokeEnabled: effectiveConfig.strokeEnabled,
                             strokeColor: effectiveConfig.strokeColor,
-                            gradientEnabled: effectiveConfig.gradientEnabled,
-                            strokeGradientEnabled: effectiveConfig.strokeGradientEnabled,
-                            fillGradientEnabled: effectiveConfig.fillGradientEnabled,
-                            gradientStops: effectiveConfig.gradientStops,
+                            gradientEnabled: overlayGradient ? false : effectiveConfig.gradientEnabled,
+                            strokeGradientEnabled: overlayGradient ? false : effectiveConfig.strokeGradientEnabled,
+                            fillGradientEnabled: overlayGradient ? false : effectiveConfig.fillGradientEnabled,
+                            gradientStops: overlayGradient ? undefined : effectiveConfig.gradientStops,
                         };
                         const colorKey = buildColorKey(recolorOpts);
 
@@ -503,6 +526,10 @@ export class GeometryRenderer {
                                 : assetCache.getGraphicsContextSync(id);
                             if (!ctx) return wrapper; // source still fetching
                             const graphics = new Graphics(ctx);
+                            // Shares a cached context — flag so returnObject never
+                            // pools/clears it (see returnObject). Without this the
+                            // shared SVG geometry gets wiped on pool reuse.
+                            (graphics as any).__sharedContext = true;
                             const bounds = graphics.getLocalBounds();
                             const w = bounds.width;
                             const h = bounds.height;
@@ -739,6 +766,13 @@ export class GeometryRenderer {
                 if (!needsSplit) {
                     const content = buildContent(rotationDeg, xVal, yVal);
                     wrapper.addChild(content);
+                    // Single gradient across the WHOLE layer: one full-frame
+                    // gradient sprite masked by the combined content (all elements
+                    // and all instances at once), not per-element. Applies to
+                    // assets too — the recolored SVG underneath just serves as the
+                    // opaque mask silhouette. (The earlier "square" here was the
+                    // bug-2 shared-context corruption masking to primitive geometry;
+                    // with that fixed the overlay clips to the real shape again.)
                     if (hasGradient) addGradientMaskedBy(content);
                     return wrapper;
                 }
