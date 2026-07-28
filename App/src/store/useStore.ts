@@ -715,26 +715,11 @@ export const useStore = create<AppState>((set, get) => {
                 const targetLayer = layers[targetIndex];
 
                 if (position === 'inside') {
-                    // Parent to target, add at end of target's children
+                    // Parent to target, insert as FIRST child (top of the stack in the
+                    // Timeline). Sibling order = flat array order filtered by parentId,
+                    // so inserting right after the group makes it the first child.
                     newParentId = targetId;
-                    // Find last child of target to insert after, or insert after target itself if no children yet?
-                    // Pixi render order: Children must come AFTER parent in the list if using flat list?
-                    // Actually, my render loop recurses.
-                    // But Timeline flat list relies on array order for siblings.
-
-                    // Find index of last descendant of target to insert after
-                    // Or just insert right after target?
-                    // If target is expanded, it shows children.
-                    // If I insert at end of children.
-
-                    // Simple approach: Insert after the LAST child of this group.
-                    let lastChildIndex = targetIndex;
-                    for (let i = targetIndex + 1; i < layers.length; i++) {
-                        if (layers[i].parentId === targetId) {
-                            lastChildIndex = i;
-                        }
-                    }
-                    insertIndex = lastChildIndex + 1;
+                    insertIndex = targetIndex + 1;
                 } else {
                     // Above/Below target. Parent is same as target's parent.
                     newParentId = targetLayer.parentId;
