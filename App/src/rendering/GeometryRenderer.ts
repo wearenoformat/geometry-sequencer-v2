@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, BlurFilter, Color, Sprite, NoiseFilter, DisplacementFilter, Texture } from 'pixi.js';
+import { Application, Container, Graphics, GraphicsContext, BlurFilter, Color, Sprite, NoiseFilter, DisplacementFilter, Texture } from 'pixi.js';
 import { assetCache, type AssetEntry } from './AssetCache';
 import { buildColorKey, type SvgRecolorOptions } from '../utils/svgRecolor';
 import { GlowFilter } from 'pixi-filters/glow';
@@ -19,6 +19,14 @@ import { AMINO_PATHS } from '../data/amino';
 export class GeometryRenderer {
     private layerCache: Map<string, Container> = new Map();
     private graphicsPool: Graphics[] = [];
+    // Graphics bound to a SHARED assetCache GraphicsContext. These must never
+    // enter graphicsPool: getGraphics()/updatePrimitive call clear(), and in
+    // Pixi v8 Graphics.clear() delegates into the context — clearing a pooled
+    // asset Graphics would wipe the cached SVG geometry for every instance,
+    // layer, and renderer using that asset (shapes visibly swap to whatever
+    // primitive draws next, and the corruption persists until page reload
+    // because the cache is page-global).
+    private assetGraphicsPool: Graphics[] = [];
     private containerPool: Container[] = [];
     private displacementTexture: Texture | null = null;
     private displacementSprite: Sprite | null = null;
@@ -70,11 +78,36 @@ export class GeometryRenderer {
             g.rotation = 0;
             g.scale.set(1);
             g.position.set(0);
+            g.pivot.set(0);
             g.filters = [];
             g.mask = null;
             return g;
         }
         return new Graphics();
+    }
+
+    // Pooled Graphics for SVG assets. Reuses the wrapper object but re-points
+    // it at the cached context via the setter (which moves the update/unload
+    // listeners), so we never allocate per-frame and never touch the shared
+    // context's geometry. No clear() here — that would destroy the cache.
+    private getAssetGraphics(ctx: GraphicsContext): Graphics {
+        const g = this.assetGraphicsPool.pop();
+        if (g) {
+            g.context = ctx;
+            g.visible = true;
+            g.alpha = 1;
+            g.rotation = 0;
+            g.scale.set(1);
+            g.position.set(0);
+            g.pivot.set(0);
+            g.filters = [];
+            g.mask = null;
+            (g as any).__gsSharedCtx = true;
+            return g;
+        }
+        const fresh = new Graphics(ctx);
+        (fresh as any).__gsSharedCtx = true;
+        return fresh;
     }
 
     private getContainer(): Container {
@@ -102,7 +135,11 @@ export class GeometryRenderer {
         if (obj instanceof Sprite) {
             obj.destroy();
         } else if (obj instanceof Graphics) {
-            this.graphicsPool.push(obj);
+            if ((obj as any).__gsSharedCtx) {
+                this.assetGraphicsPool.push(obj);
+            } else {
+                this.graphicsPool.push(obj);
+            }
         } else if (obj instanceof Container) {
             obj.children.forEach(child => this.returnObject(child as Container | Graphics | Sprite));
             obj.removeChildren();
@@ -502,7 +539,7 @@ export class GeometryRenderer {
                                 ? assetCache.getGraphicsContextSync(id, colorKey, recolorOpts)
                                 : assetCache.getGraphicsContextSync(id);
                             if (!ctx) return wrapper; // source still fetching
-                            const graphics = new Graphics(ctx);
+                            const graphics = this.getAssetGraphics(ctx);
                             const bounds = graphics.getLocalBounds();
                             const w = bounds.width;
                             const h = bounds.height;
@@ -844,6 +881,15 @@ export class GeometryRenderer {
     public cleanup() {
         this.layerCache.clear();
         this.graphicsPool = [];
+        // Detach pooled asset Graphics from their shared cached contexts before
+        // dropping them: Graphics.destroy() nulls _context without unhooking the
+        // update/unload listeners the context setter attached, so we re-point at
+        // a throwaway owned-nothing context first (the setter does the .off()).
+        for (const g of this.assetGraphicsPool) {
+            g.context = new GraphicsContext();
+            g.destroy();
+        }
+        this.assetGraphicsPool = [];
         this.containerPool = [];
     }
 }
