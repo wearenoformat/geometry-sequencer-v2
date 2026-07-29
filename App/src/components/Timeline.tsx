@@ -30,6 +30,8 @@ interface VisualLayerItem {
 interface DropTarget {
     targetId: string;
     position: 'above' | 'below' | 'inside';
+    index: number; // Visual row index, used to place the drop indicator line
+    depth: number; // Indent level the drop will land at, used to inset the line
 }
 
 const Timeline: React.FC = () => {
@@ -68,6 +70,7 @@ const Timeline: React.FC = () => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [dragState, setDragState] = useState<DragState | null>(null);
     const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+    const [dragMouse, setDragMouse] = useState<{ x: number; y: number } | null>(null);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [layerToDelete, setLayerToDelete] = useState<string | null>(null);
     const [tempName, setTempName] = useState('');
@@ -210,10 +213,16 @@ const Timeline: React.FC = () => {
 
     const onMouseDown = (e: React.MouseEvent, type: DragType, layerId?: string, indexOrParams?: any) => {
         e.stopPropagation();
+        // Stop the browser from starting a native drag or text-selection drag —
+        // those swallow our mousemove/mouseup and strand the custom drag mid-flight
+        e.preventDefault();
 
         if (type === 'reorder') {
             // Check if draggable?
-            if (layerId) setDragState({ type, layerId });
+            if (layerId) {
+                setDragState({ type, layerId });
+                setDragMouse({ x: e.clientX, y: e.clientY });
+            }
             return;
         } else if (type === 'move' && layerId) {
             const layer = project.layers.find(l => l.id === layerId);
@@ -266,64 +275,103 @@ const Timeline: React.FC = () => {
                     updateLayer(dragState.layerId, { timeline: { start: newStart, end: newStart + duration } });
                 }
             } else if (dragState.type === 'reorder' && dragState.layerId) {
-                // We need to match Y coordinate to the list rows
-                // Rows use h-10 class which is 40px (10 * 4px)
-                const ROW_HEIGHT = 40;
+                // Ghost preview follows the cursor
+                setDragMouse({ x: e.clientX, y: e.clientY });
 
                 // Calculate index relative to scroll container
                 const scrollContainer = scrollContainerRef.current;
                 if (!scrollContainer) return;
 
                 const rect = scrollContainer.getBoundingClientRect();
-                const sy = scrollContainer.scrollTop;
 
-                // Relative Y within the scroll content
-                const relativeY = e.clientY - rect.top + sy;
-                const index = Math.floor(relativeY / ROW_HEIGHT);
+                // Autoscroll when dragging near the container edges
+                if (e.clientY < rect.top + 20) scrollContainer.scrollTop -= 5;
+                else if (e.clientY > rect.bottom - 20) scrollContainer.scrollTop += 5;
 
-                if (index >= 0 && index < visualLayers.length) {
-                    const targetItem = visualLayers[index];
-                    const targetId = targetItem.layer.id;
+                // Measure real row geometry from the DOM — rows are sized in rem
+                // (h-10), so a hardcoded 40px drifts when the browser's base font
+                // size isn't 16px
+                const listEl = scrollContainer.firstElementChild as HTMLElement | null;
+                const firstRow = listEl?.firstElementChild as HTMLElement | null;
+                if (!listEl || !firstRow) return;
+                const ROW_HEIGHT = firstRow.getBoundingClientRect().height || 40;
 
-                    // If dragging over itself, ignore
-                    if (targetId === dragState.layerId) {
+                // Check for Circular Reference (Target is descendant of Source)
+                const isDescendant = (parent: string, child: string): boolean => {
+                    let current = project.layers.find(l => l.id === child);
+                    while (current && current.parentId) {
+                        if (current.parentId === parent) return true;
+                        current = project.layers.find(l => l.id === current?.parentId);
+                    }
+                    return false;
+                };
+
+                // Relative Y within the scroll content (list top already accounts for scroll)
+                const relativeY = e.clientY - listEl.getBoundingClientRect().top;
+                const rawIndex = Math.floor(relativeY / ROW_HEIGHT);
+
+                // Past the end of the list: drop at root level, after everything.
+                // Target the last row's root ancestor so the drop escapes any folder.
+                if (rawIndex >= visualLayers.length) {
+                    const lastIndex = visualLayers.length - 1;
+                    let root: Layer | undefined = visualLayers[lastIndex]?.layer;
+                    while (root && root.parentId) root = project.layers.find(l => l.id === root!.parentId);
+                    if (!root || root.id === dragState.layerId || isDescendant(dragState.layerId, root.id)) {
                         setDropTarget(null);
                         return;
                     }
-
-                    // Check for Circular Reference (Target is descendant of Source)
-                    const isDescendant = (parent: string, child: string): boolean => {
-                        let current = project.layers.find(l => l.id === child);
-                        while (current && current.parentId) {
-                            if (current.parentId === parent) return true;
-                            current = project.layers.find(l => l.id === current?.parentId);
-                        }
-                        return false;
-                    };
-
-                    if (isDescendant(dragState.layerId, targetId)) {
-                        setDropTarget(null);
-                        return;
-                    }
-
-                    const offsetInRow = relativeY % ROW_HEIGHT;
-                    let position: 'above' | 'below' | 'inside' = 'below';
-
-                    if (targetItem.layer.type === 'group') {
-                        // Group: Top 25% Above, Middle 50% Inside, Bottom 25% Below
-                        if (offsetInRow < ROW_HEIGHT * 0.25) position = 'above';
-                        else if (offsetInRow > ROW_HEIGHT * 0.75) position = 'below';
-                        else position = 'inside';
-                    } else {
-                        // Non-Group: 50/50 Split
-                        if (offsetInRow < ROW_HEIGHT * 0.5) position = 'above';
-                        else position = 'below';
-                    }
-
-                    setDropTarget({ targetId, position });
-                } else {
-                    setDropTarget(null);
+                    setDropTarget({ targetId: root.id, position: 'below', index: lastIndex, depth: 0 });
+                    return;
                 }
+
+                const index = Math.max(0, rawIndex);
+                const targetItem = visualLayers[index];
+                if (!targetItem) {
+                    setDropTarget(null);
+                    return;
+                }
+                let targetId = targetItem.layer.id;
+                let lineIndex = index;
+
+                const offsetInRow = Math.max(0, Math.min(ROW_HEIGHT, relativeY - index * ROW_HEIGHT));
+                let position: 'above' | 'below' | 'inside' = 'below';
+
+                if (targetItem.layer.type === 'group') {
+                    const hasVisibleChildren = visualLayers[index + 1]?.layer.parentId === targetId;
+                    if (offsetInRow < ROW_HEIGHT * 0.25) position = 'above';
+                    else if (hasVisibleChildren) position = 'inside'; // whole rest of the row = into folder (top of stack)
+                    else if (offsetInRow > ROW_HEIGHT * 0.75) position = 'below';
+                    else position = 'inside';
+                } else {
+                    // Non-Group: 50/50 Split
+                    if (offsetInRow < ROW_HEIGHT * 0.5) position = 'above';
+                    else position = 'below';
+                }
+
+                // Dropping 'below' a row whose children are visible actually lands after
+                // the whole subtree — but the line would draw between the row and its
+                // first child. Retarget to 'above' the first child so line and drop agree.
+                if (position === 'below') {
+                    const next = visualLayers[index + 1];
+                    if (next && next.layer.parentId === targetId) {
+                        targetId = next.layer.id;
+                        position = 'above';
+                        lineIndex = index + 1;
+                    }
+                }
+
+                // Invalid targets (itself, or its own descendants): hide the indicator
+                if (targetId === dragState.layerId || isDescendant(dragState.layerId, targetId)) {
+                    setDropTarget(null);
+                    return;
+                }
+
+                setDropTarget({
+                    targetId,
+                    position,
+                    index: lineIndex,
+                    depth: position === 'inside' ? targetItem.depth + 1 : visualLayers[lineIndex].depth
+                });
             } else if (dragState.type === 'resize-duration' && timelineRef.current) {
                 const rect = timelineRef.current.getBoundingClientRect();
                 const initialDuration = dragState.startDuration || project.duration;
@@ -394,18 +442,39 @@ const Timeline: React.FC = () => {
             }
             setDropTarget(null);
             setDragState(null);
+            setDragMouse(null);
         };
+
+        // Abandon the drag without dropping (Escape, window losing focus)
+        const cancelDrag = () => {
+            setDropTarget(null);
+            setDragState(null);
+            setDragMouse(null);
+        };
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') cancelDrag();
+        };
+        // Belt-and-braces: kill any native drag that sneaks in mid-gesture
+        const handleDragStart = (e: DragEvent) => e.preventDefault();
 
         if (dragState) {
             window.addEventListener('mousemove', handleMouseMove);
             window.addEventListener('mouseup', handleMouseUp);
+            window.addEventListener('dragstart', handleDragStart);
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('blur', cancelDrag);
+            if (dragState.type === 'reorder') document.body.style.cursor = 'grabbing';
         }
 
         return () => {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('dragstart', handleDragStart);
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('blur', cancelDrag);
+            if (dragState?.type === 'reorder') document.body.style.cursor = '';
         };
-    }, [dragState, project.duration, project.layers, setCurrentTime, updateLayer, moveLayer, updateProject, updateKeyframe, dropTarget]);
+    }, [dragState, project.duration, project.layers, visualLayers, setCurrentTime, updateLayer, moveLayer, updateProject, updateKeyframe, dropTarget]);
 
     const commitDurationChange = () => {
         let newDuration = parseFloat(tempDuration);
@@ -563,27 +632,27 @@ const Timeline: React.FC = () => {
             {/* Scrollable Content Area */}
             <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden relative">
                 {/* Layer List & Tracks */}
-                <div className="min-w-full">
+                <div className="min-w-full relative">
                     {visualLayers.map((item, index) => {
                         const { layer, depth, hasChildren, isExpanded, isVisible } = item;
                         if (!isVisible) return null;
 
                         const isSelected = selectedLayerIds?.includes(layer.id) || activeLayerId === layer.id;
 
-                        // Drop Target Indicator
-                        const isDropTarget = dropTarget?.targetId === layer.id;
-                        let dropStyle = '';
-                        if (isDropTarget) {
-                            if (dropTarget?.position === 'above') dropStyle = 'border-t-[2px] border-t-[#D4AF37]';
-                            else if (dropTarget?.position === 'below') dropStyle = 'border-b-[2px] border-b-[#D4AF37]';
-                            else if (dropTarget?.position === 'inside') dropStyle = 'bg-[#D4AF37]/20';
-                        }
+                        // Drop Target Indicator — the line anchors to this row's own edge so it's
+                        // always exactly on the boundary the layer will land on ('inside' lands
+                        // as first child, so its line sits at the folder row's bottom edge)
+                        const isDropInside = dropTarget?.targetId === layer.id && dropTarget?.position === 'inside';
+                        const isBeingDragged = dragState?.type === 'reorder' && dragState.layerId === layer.id;
+                        const dropLineAt = dragState?.type === 'reorder' && dropTarget?.index === index
+                            ? (dropTarget.position === 'above' ? 'top' : 'bottom')
+                            : null;
 
                         return (
                             <div
                                 key={layer.id}
                                 className={`flex h-10 border-b border-white/5 relative group transition-colors ${isSelected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.02]'
-                                    } ${dropStyle}`}
+                                    } ${isDropInside ? 'bg-[#D4AF37]/20' : ''} ${isBeingDragged ? 'opacity-40' : ''}`}
                                 onClick={(e) => handleLayerClick(e, layer.id, index)}
                                 onDoubleClick={(e) => {
                                     e.stopPropagation();
@@ -605,6 +674,19 @@ const Timeline: React.FC = () => {
                                     }
                                 }}
                             >
+                                {/* Drop Indicator Line (anchored to this row's edge) */}
+                                {dropLineAt && dropTarget && (
+                                    <div
+                                        className="absolute right-0 h-[2px] bg-[#D4AF37] z-30 pointer-events-none shadow-[0_0_6px_rgba(212,175,55,0.8)]"
+                                        style={{
+                                            [dropLineAt]: -1,
+                                            left: dropTarget.depth * 10
+                                        }}
+                                    >
+                                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-[#D4AF37]" />
+                                    </div>
+                                )}
+
                                 {/* Layer Info Sidebar Item */}
                                 <div style={{ width: sidebarWidth }} className="border-r border-white/10 flex items-center h-full shrink-0 bg-black/10 group/sidebar z-10 relative">
 
@@ -810,6 +892,22 @@ const Timeline: React.FC = () => {
                 <div className="flex-1" />
                 <div>{selectedLayerIds ? selectedLayerIds.length : 0} Selected</div>
             </div>
+
+            {/* Drag Ghost (follows cursor while reordering) */}
+            {dragState?.type === 'reorder' && dragMouse && (() => {
+                const draggedLayer = project.layers.find(l => l.id === dragState.layerId);
+                if (!draggedLayer) return null;
+                return (
+                    <div
+                        className="fixed z-[200] pointer-events-none flex items-center gap-1.5 px-2 py-1 rounded bg-[#2a2a2a] border border-[#D4AF37]/60 shadow-xl"
+                        style={{ left: dragMouse.x + 12, top: dragMouse.y - 12 }}
+                    >
+                        <GripVertical size={10} className="text-[#D4AF37]" />
+                        {draggedLayer.type === 'group' && <Folder size={10} className="text-[#D4AF37]" />}
+                        <span className="text-[10px] font-medium text-white/90 max-w-[160px] truncate">{draggedLayer.name}</span>
+                    </div>
+                );
+            })()}
 
             {/* Delete Folder Modal */}
             {layerToDelete && (
