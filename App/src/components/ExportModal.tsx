@@ -11,6 +11,17 @@ import {
     countAssetLayers,
     escapeForTemplate,
 } from '../utils/exportHelpers';
+import {
+    VIDEO_RESOLUTIONS,
+    VIDEO_ASPECT_RATIOS,
+    RESOLUTION_LABELS,
+    ASPECT_RATIO_LABELS,
+    getVideoDimensions,
+    applyExportViewScale,
+    aspectRatioSlug,
+    type VideoResolution,
+    type VideoAspectRatio,
+} from './videoFormats';
 
 interface ExportModalProps {
     onClose: () => void;
@@ -53,8 +64,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
     // New State for Transparent Background
     const [transparentBg, setTransparentBg] = useState(false);
 
-    const [resolution, setResolution] = useState<'720p' | '1080p'>('1080p');
-    const [aspectRatio, setAspectRatio] = useState<'16:9' | '1:1'>('16:9');
+    const [resolution, setResolution] = useState<VideoResolution>('1080p');
+    const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
 
     const [supportedFormats, setSupportedFormats] = useState<string[]>([]);
     const [selectedFormat, setSelectedFormat] = useState<string>('');
@@ -70,15 +81,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
         setStatus('Initializing...');
 
         // 1. Setup Dimensions
-        let width = 1920;
-        let height = 1080;
-        if (resolution === '720p') {
-            height = 720;
-            width = aspectRatio === '16:9' ? 1280 : 720;
-        } else {
-            height = 1080;
-            width = aspectRatio === '16:9' ? 1920 : 1080;
-        }
+        const dims = getVideoDimensions(resolution, aspectRatio);
+        const { width, height } = dims;
 
         // 2. Create Detached Canvas & Pixi App
         const canvas = document.createElement('canvas');
@@ -101,6 +105,10 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
             preference: 'webgl',
             backgroundAlpha: transparentBg ? 0 : 1
         });
+
+        // Frame the export like the editor: same content region as the
+        // crop-preview guides regardless of output resolution.
+        applyExportViewScale(app.stage, dims);
 
         const renderer = new GeometryRenderer();
 
@@ -155,7 +163,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
             app.destroy(true, { children: true, texture: true });
 
             const extension = selectedFormat.includes('mp4') ? 'mp4' : 'webm';
-            const filename = `${project.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${resolution}_${aspectRatio === '16:9' ? '16x9' : '1x1'}.${extension}`;
+            const filename = `${project.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${resolution}_${aspectRatioSlug(aspectRatio)}.${extension}`;
             downloadVideo(blob, filename);
 
             setIsExporting(false);
@@ -1100,13 +1108,13 @@ ${hasAssets ? '    <!-- Asset Registry (asset_set / asset_single, inlined as dat
                                     <div className="space-y-2">
                                         <label className="text-xs font-bold text-white/60 uppercase tracking-wider">Resolution</label>
                                         <div className="flex flex-col gap-1">
-                                            {['720p', '1080p'].map(res => (
+                                            {VIDEO_RESOLUTIONS.map(res => (
                                                 <button
                                                     key={res}
-                                                    onClick={() => setResolution(res as any)}
+                                                    onClick={() => setResolution(res)}
                                                     className={`px-3 py-2 text-xs rounded-md transition-all text-left ${resolution === res ? 'bg-[#D4AF37] text-black font-bold' : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'}`}
                                                 >
-                                                    {res} <span className="opacity-50 ml-1">{res === '720p' ? 'HD' : 'FHD'}</span>
+                                                    {res} <span className="opacity-50 ml-1">{RESOLUTION_LABELS[res]}</span>
                                                 </button>
                                             ))}
                                         </div>
@@ -1114,17 +1122,23 @@ ${hasAssets ? '    <!-- Asset Registry (asset_set / asset_single, inlined as dat
                                     <div className="space-y-2">
                                         <label className="text-xs font-bold text-white/60 uppercase tracking-wider">Ratio</label>
                                         <div className="flex flex-col gap-1">
-                                            {['16:9', '1:1'].map(ratio => (
+                                            {VIDEO_ASPECT_RATIOS.map(ratio => (
                                                 <button
                                                     key={ratio}
-                                                    onClick={() => setAspectRatio(ratio as any)}
+                                                    onClick={() => setAspectRatio(ratio)}
                                                     className={`px-3 py-2 text-xs rounded-md transition-all text-left ${aspectRatio === ratio ? 'bg-[#D4AF37] text-black font-bold' : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'}`}
                                                 >
-                                                    {ratio} <span className="opacity-50 ml-1">{ratio === '16:9' ? 'Wide' : 'Square'}</span>
+                                                    {ratio} <span className="opacity-50 ml-1">{ASPECT_RATIO_LABELS[ratio]}</span>
                                                 </button>
                                             ))}
                                         </div>
                                     </div>
+                                </div>
+                                <div className="text-[10px] text-white/30 px-1 -mt-3">
+                                    Output: <span className="text-white/60">
+                                        {getVideoDimensions(resolution, aspectRatio).width}×{getVideoDimensions(resolution, aspectRatio).height}
+                                    </span>
+                                    {resolution === '4K' && <span className="ml-2 text-[#D4AF37]/70">4K renders are slower</span>}
                                 </div>
 
                                 {/* Duration Settings */}

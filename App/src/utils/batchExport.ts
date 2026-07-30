@@ -21,6 +21,12 @@ import {
     stripThumbnail,
     type CollectedExport,
 } from './exportHelpers';
+import {
+    getVideoDimensions,
+    applyExportViewScale,
+    type VideoResolution,
+    type VideoAspectRatio,
+} from '../components/videoFormats';
 
 type ProjectWithThumb = Project & { thumbnailData?: string };
 
@@ -700,8 +706,8 @@ const styles = StyleSheet.create({
 // Video — sequential per-project render, zipped together
 // ────────────────────────────────────────────────────────────────────
 export type BatchVideoOpts = BatchOpts & {
-    resolution: '720p' | '1080p';
-    aspectRatio: '16:9' | '1:1';
+    resolution: VideoResolution;
+    aspectRatio: VideoAspectRatio;
     durationMode: 'loop' | 'time';
     loopCount: number;
     seconds: number;
@@ -758,15 +764,8 @@ export async function runBatchVideoExport(opts: BatchVideoOpts): Promise<Blob> {
     const slugs = buildSlugMap(projects);
     const zip = new JSZip();
 
-    let width = 1920;
-    let height = 1080;
-    if (resolution === '720p') {
-        height = 720;
-        width = aspectRatio === '16:9' ? 1280 : 720;
-    } else {
-        height = 1080;
-        width = aspectRatio === '16:9' ? 1920 : 1080;
-    }
+    const dims = getVideoDimensions(resolution, aspectRatio);
+    const { width, height } = dims;
 
     const { Application } = await import('pixi.js');
     const { GeometryRenderer } = await import('../rendering/GeometryRenderer');
@@ -794,6 +793,10 @@ export async function runBatchVideoExport(opts: BatchVideoOpts): Promise<Blob> {
             preference: 'webgl',
             backgroundAlpha: transparentBg ? 0 : 1,
         });
+
+        // Frame the export like the editor: same content region as the
+        // crop-preview guides regardless of output resolution.
+        applyExportViewScale(app.stage, dims);
 
         const renderer = new GeometryRenderer();
         const totalDuration = durationMode === 'loop'

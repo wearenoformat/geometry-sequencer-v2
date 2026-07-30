@@ -19,6 +19,14 @@ import {
     type BatchProgressStatus,
 } from '../utils/batchExport';
 import { blobToBase64, safeFilename } from '../utils/exportHelpers';
+import {
+    VIDEO_RESOLUTIONS,
+    VIDEO_ASPECT_RATIOS,
+    RESOLUTION_LABELS,
+    ASPECT_RATIO_LABELS,
+    type VideoResolution,
+    type VideoAspectRatio,
+} from './videoFormats';
 
 interface BatchExportModalProps {
     folder: Folder;
@@ -46,8 +54,8 @@ const BatchExportModal: React.FC<BatchExportModalProps> = ({ folder, projects: p
     const [transparentBg, setTransparentBg] = useState(false);
 
     // Video options
-    const [resolution, setResolution] = useState<'720p' | '1080p'>('1080p');
-    const [aspectRatio, setAspectRatio] = useState<'16:9' | '1:1'>('16:9');
+    const [resolution, setResolution] = useState<VideoResolution>('1080p');
+    const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
     const [durationMode, setDurationMode] = useState<'loop' | 'time'>('loop');
     const [loopCount, setLoopCount] = useState(1);
     const [seconds, setSeconds] = useState(10);
@@ -378,13 +386,13 @@ const BatchExportModal: React.FC<BatchExportModalProps> = ({ folder, projects: p
                                     <div className="space-y-2">
                                         <label className="text-xs font-bold text-white/60 uppercase tracking-wider">Resolution</label>
                                         <div className="flex flex-col gap-1">
-                                            {(['720p', '1080p'] as const).map(res => (
+                                            {VIDEO_RESOLUTIONS.map(res => (
                                                 <button
                                                     key={res}
                                                     onClick={() => setResolution(res)}
                                                     className={`px-3 py-2 text-xs rounded-md transition-all text-left ${resolution === res ? 'bg-[#D4AF37] text-black font-bold' : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'}`}
                                                 >
-                                                    {res}
+                                                    {res} <span className="opacity-50 ml-1">{RESOLUTION_LABELS[res]}</span>
                                                 </button>
                                             ))}
                                         </div>
@@ -392,13 +400,13 @@ const BatchExportModal: React.FC<BatchExportModalProps> = ({ folder, projects: p
                                     <div className="space-y-2">
                                         <label className="text-xs font-bold text-white/60 uppercase tracking-wider">Ratio</label>
                                         <div className="flex flex-col gap-1">
-                                            {(['16:9', '1:1'] as const).map(ratio => (
+                                            {VIDEO_ASPECT_RATIOS.map(ratio => (
                                                 <button
                                                     key={ratio}
                                                     onClick={() => setAspectRatio(ratio)}
                                                     className={`px-3 py-2 text-xs rounded-md transition-all text-left ${aspectRatio === ratio ? 'bg-[#D4AF37] text-black font-bold' : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'}`}
                                                 >
-                                                    {ratio}
+                                                    {ratio} <span className="opacity-50 ml-1">{ASPECT_RATIO_LABELS[ratio]}</span>
                                                 </button>
                                             ))}
                                         </div>
