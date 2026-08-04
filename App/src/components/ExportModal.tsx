@@ -70,11 +70,13 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
     const [supportedFormats, setSupportedFormats] = useState<string[]>([]);
     const [selectedFormat, setSelectedFormat] = useState<string>('');
 
+    const hasAudibleAudio = !!(project.audio && !project.audio.muted && project.audio.volume > 0);
+
     React.useEffect(() => {
-        const formats = getSupportedMimeTypes();
+        const formats = getSupportedMimeTypes(hasAudibleAudio);
         setSupportedFormats(formats);
         if (formats.length > 0) setSelectedFormat(formats[0]);
-    }, [getSupportedMimeTypes]);
+    }, [getSupportedMimeTypes, hasAudibleAudio]);
 
     const handleVideoExport = async () => {
         setIsExporting(true);
@@ -112,14 +114,26 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
 
         const renderer = new GeometryRenderer();
 
+        // 2b. Prepare the music track (null when absent/muted — export is then
+        // identical to an audio-less one).
+        setStatus('Preparing audio...');
+        const { createExportAudioGraph } = await import('./exportAudio');
+        const audioGraph = await createExportAudioGraph(
+            project,
+            (id) => useStore.getState().signedUrlForAsset(id)
+        );
+
         // 3. Start Recording
         setStatus('Recording...');
-        startRecording(canvas, selectedFormat);
+        startRecording(canvas, selectedFormat, audioGraph?.track);
 
         // 4. Render Loop
         const totalDuration = durationMode === 'loop'
             ? (project.duration || 10) * loopCount
             : seconds;
+
+        // Schedule audio against the same wall-clock origin as the render loop.
+        audioGraph?.start(totalDuration, project.duration || 10);
 
         const startTime = Date.now();
         let animationFrameId: number;
@@ -158,6 +172,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
             setStatus('Finalizing...');
 
             const blob = await stopRecording();
+            await audioGraph?.dispose();
 
             renderer.cleanup();
             app.destroy(true, { children: true, texture: true });
@@ -208,6 +223,12 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
             //    the unzipped index.html. Data URLs work under file:// and
             //    keep the export self-contained.
             const collected = await collectExportAssets(project, setStatus);
+
+            const audioAsset = collected.assets.find(a => a.mimeType === 'audio/mpeg');
+            if (audioAsset) {
+                const embeddedMb = (audioAsset.blob.size * 1.34) / (1024 * 1024); // base64 overhead
+                setStatus(`Embedding audio (~${embeddedMb.toFixed(1)}MB)...`);
+            }
 
             const registryAssets: Record<string, { url: string; mimeType: string }> = {};
             for (const a of collected.assets) {
@@ -350,6 +371,18 @@ ${hasAssets ? '    <!-- Asset Registry (asset_set / asset_single, inlined as dat
 
             // 2. Add Project Data
             zip.file('src/project.json', JSON.stringify(project, null, 2));
+
+            // 2b. Music track — served from the Vite public dir; the template's
+            // App.tsx looks for /audio.mp3 when project.audio is present.
+            if (project.audio?.assetId) {
+                setStatus('Fetching audio...');
+                const url = await useStore.getState().signedUrlForAsset(project.audio.assetId);
+                if (url) {
+                    const res = await fetch(url);
+                    if (res.ok) zip.file('public/audio.mp3', await res.blob());
+                }
+                setStatus('Packaging React App...');
+            }
 
             // 3. Generate Blob
             const content = await zip.generateAsync({ type: 'blob' });

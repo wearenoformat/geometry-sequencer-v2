@@ -27,6 +27,7 @@ export const extensionForMime = (mime: AssetMimeType): string => {
         case 'image/png':     return 'png';
         case 'image/jpeg':    return 'jpg';
         case 'text/plain':    return 'txt';
+        case 'audio/mpeg':    return 'mp3';
         default:              return 'bin';
     }
 };
@@ -44,8 +45,9 @@ export const blobToBase64 = (blob: Blob): Promise<string> =>
     });
 
 // Walks the project, fetches every asset referenced by asset_set / asset_single
-// layers (including all assets in any referenced folder, in order), and returns
-// them as in-memory blobs ready to be written into a zip.
+// layers (including all assets in any referenced folder, in order) plus the
+// project's music track, and returns them as in-memory blobs ready to be
+// written into a zip.
 export async function collectExportAssets(
     project: Project,
     onStatus: (msg: string) => void,
@@ -59,6 +61,12 @@ export async function collectExportAssets(
         } else if (layer.type === 'asset_single' && layer.config.assetId) {
             singleAssetIds.add(layer.config.assetId);
         }
+    }
+
+    // The music track rides along as a single asset — the metadata fallback
+    // fetch below resolves it like any other unfoldered reference.
+    if (project.audio?.assetId) {
+        singleAssetIds.add(project.audio.assetId);
     }
 
     if (folderIds.size === 0 && singleAssetIds.size === 0) {

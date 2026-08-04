@@ -79,14 +79,42 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 )
 `;
 
-const APP_TSX = `import React, { useState, useEffect } from 'react';
+const APP_TSX = `import React, { useState, useEffect, useRef } from 'react';
 import GeometryPlayer from './components/GeometryPlayer';
 import projectData from './project.json';
 import { Project } from './types';
 
+// Music track config exported with the project (may be absent). The mp3 blob
+// itself is shipped as public/audio.mp3 and served from the site root.
+const audioCfg: any = (projectData as any).audio;
+const hasAudio = !!(audioCfg && !audioCfg.muted && audioCfg.volume > 0);
+
 function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // When true, the loop (re)starts the audio once playback reaches the
+  // track's offset — rearmed at every loop boundary and on pause/resume.
+  const audioPendingRef = useRef(true);
+
+  useEffect(() => {
+    if (!hasAudio) return;
+    const el = new Audio('/audio.mp3');
+    el.volume = Math.max(0, Math.min(1, audioCfg.volume));
+    el.preload = 'auto';
+    audioRef.current = el;
+    return () => { el.pause(); audioRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (isPlaying) {
+      audioPendingRef.current = true; // loop effect starts it at the right spot
+    } else {
+      el.pause();
+    }
+  }, [isPlaying]);
 
   useEffect(() => {
     let animationFrameId: number;
@@ -100,7 +128,32 @@ function App() {
         setCurrentTime(prev => {
            // @ts-ignore
            const duration = projectData.duration || 10;
-           return (prev + dt) % duration;
+           let next = prev + dt;
+           const el = audioRef.current;
+           const offset = audioCfg ? (audioCfg.offset || 0) : 0;
+
+           if (next >= duration) {
+             next = next % duration;
+             if (el) { el.pause(); audioPendingRef.current = true; }
+           }
+
+           if (el) {
+             if (audioPendingRef.current && next >= Math.max(0, offset)) {
+               audioPendingRef.current = false;
+               el.currentTime = Math.max(0, next - offset);
+               // Autoplay policy may reject before any user gesture — fall back
+               // to paused; pressing PLAY (a gesture) starts audio and visuals.
+               el.play().catch(() => setIsPlaying(false));
+             } else if (!el.paused && !el.ended) {
+               // Audio is the clock master while it plays — re-seed to kill drift.
+               const audioTime = el.currentTime + offset;
+               if (Math.abs(audioTime - next) > 0.05 && audioTime < duration) {
+                 next = audioTime;
+               }
+             }
+           }
+
+           return next;
         });
       }
       animationFrameId = requestAnimationFrame(loop);

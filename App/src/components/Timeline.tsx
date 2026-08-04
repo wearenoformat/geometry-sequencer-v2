@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { useStore } from '../store/useStore';
 import { Eye, EyeOff, GripVertical, Plus, ChevronRight, Square, Trash2, Copy, Edit3, RotateCw, Folder, ChevronDown, FolderPlus, Clipboard, ClipboardPaste } from 'lucide-react';
 import type { Layer } from '../types';
+import AudioTrackRow from './AudioTrackRow';
 
 type DragType = 'scrub' | 'reorder' | 'move' | 'resize-duration' | 'move-keyframe';
 
@@ -629,6 +630,9 @@ const Timeline: React.FC = () => {
                 </div>
             </div>
 
+            {/* Music track — pinned above the layer list, never scrolls away */}
+            <AudioTrackRow sidebarWidth={sidebarWidth} />
+
             {/* Scrollable Content Area */}
             <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden relative">
                 {/* Layer List & Tracks */}
@@ -867,6 +871,18 @@ const Timeline: React.FC = () => {
                     })}
 
                     {/* Add Button at bottom if empty? */}
+
+                    {/* Full-height playhead through the layer rows, aligned with the
+                        header ruler (both track areas start after the sidebar). */}
+                    <div
+                        className="absolute top-0 bottom-0 pointer-events-none z-20"
+                        style={{ left: sidebarWidth, right: 0 }}
+                    >
+                        <div
+                            className="absolute top-0 bottom-0 w-[1px] bg-[#D4AF37]/60"
+                            style={{ left: `${(currentTime / project.duration) * 100}%` }}
+                        />
+                    </div>
                 </div>
 
                 {/* Spacer at bottom */}

@@ -2,6 +2,8 @@ import React, { useRef, useEffect, useState } from 'react';
 import { useStore } from '../store/useStore';
 import GeometryPlayer from './GeometryPlayer';
 import { getCropOption, REFERENCE_WIDTH, REFERENCE_HEIGHT } from './cropPreview';
+import { audioEngine } from './audioEngine';
+import { useAudioSync } from './useAudioSync';
 
 interface GeometryCanvasProps {
     /** Editor mode: render at a fixed reference frame (scaled to fit) with a
@@ -29,6 +31,9 @@ const GeometryCanvas: React.FC<GeometryCanvasProps> = ({ framed = false }) => {
         setCurrentTime,
         setIsPlaying
     } = useStore();
+
+    // Keep the music track's audio element in lockstep with playback state.
+    useAudioSync();
 
     const [dimensions, setDimensions] = useState(
         framed ? EDITOR_REFERENCE : { width: 800, height: 600 }
@@ -76,14 +81,41 @@ const GeometryCanvas: React.FC<GeometryCanvasProps> = ({ framed = false }) => {
         if (!isPlaying) return;
 
         let nextTime = currentTime + dt;
+        let wrapped = false;
         if (nextTime >= project.duration) {
             if (isLooping) {
                 nextTime = 0;
+                wrapped = true;
             } else {
                 nextTime = project.duration;
                 setIsPlaying(false);
+                audioEngine.pause();
             }
         }
+
+        // With a music track loaded, the audio element is the clock master —
+        // the accumulated ticker time drifts against it, so re-seed each frame.
+        const audio = project.audio;
+        if (audio) {
+            if (wrapped) {
+                // Loop boundary: restart the audio (seeking a playing element
+                // keeps it playing).
+                audioEngine.seek(0, audio.offset);
+            } else {
+                const audioTime = audioEngine.getProjectTime(audio.offset);
+                if (audioTime !== null) {
+                    const drift = audioTime - nextTime;
+                    if (Math.abs(drift) > 0.3) {
+                        // Big gap = the playhead was scrubbed while playing —
+                        // follow the playhead, not the audio.
+                        audioEngine.seek(nextTime, audio.offset);
+                    } else if (Math.abs(drift) > 0.05) {
+                        nextTime = Math.min(audioTime, project.duration);
+                    }
+                }
+            }
+        }
+
         setCurrentTime(nextTime);
     };
 

@@ -17,6 +17,7 @@ const TopBar: React.FC = () => {
     const signOut = useStore(s => s.signOut);
     const editorPreviewCrop = useStore(s => s.editorPreviewCrop);
     const setEditorPreviewCrop = useStore(s => s.setEditorPreviewCrop);
+    const upgradedFromVersion = useStore(s => s.upgradedFromVersion);
     const activeCrop = getCropOption(editorPreviewCrop);
 
     const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -148,6 +149,14 @@ const TopBar: React.FC = () => {
                             >
                                 <ChevronDown size={14} />
                             </button>
+                            {upgradedFromVersion !== null && (
+                                <span
+                                    className="px-1.5 py-0.5 rounded border border-[#D4AF37]/40 text-[8px] uppercase tracking-widest text-[#D4AF37]/80 select-none"
+                                    title="Opened from an older project format and upgraded automatically. Saving stores the new format."
+                                >
+                                    Upgraded
+                                </span>
+                            )}
                         </>
                     )}
 

@@ -53,6 +53,15 @@ Branch naming: `feat/<slug>-stage-<letter>`. Each stage merges to `main` via PR.
 
 **`assets`**: `id uuid`, `user_id uuid`, `folder_id uuid (ON DELETE SET NULL)`, `name text`, `mime_type text`, `storage_path text`, `size_bytes bigint`, `width int`, `height int`, `created_at timestamptz`, `last_modified bigint`.
 
-**Storage:** bucket `v2-user-assets`, private, 10MB cap, path `{user_id}/{asset_id}.{ext}`, allowed MIME `image/svg+xml`, `image/png`, `image/jpeg`, `text/plain`.
+**Storage:** bucket `v2-user-assets`, private, 25MB cap, path `{user_id}/{asset_id}.{ext}`, allowed MIME `image/svg+xml`, `image/png`, `image/jpeg`, `text/plain`, `audio/mpeg` (migration `20260804000000_v2_user_assets_audio.sql` in the v1 repo). The app keeps a tighter 10MB ceiling for images/text; only mp3 music tracks may use the full 25MB.
 
 When a folder is deleted, its assets don't cascade — they orphan (`folder_id` nulls out). App code must offer a "delete assets too" option on folder deletion, mirroring the existing `deleteFolder(id, deleteProjects?)` pattern.
+
+## Format versioning (project JSON)
+
+Every saved project payload carries `formatVersion` inside `projects.data`. The number, the ordered migration registry, and `migrateProject()` live in `App/src/utils/projectMigrations.ts` (deliberately in `utils/` so the exported player bundle includes the migrations too).
+
+- **Numbering:** payloads with no field are legacy (treated as 2 — the keyframes era). Version 3 is the first stamped version, introduced with the music track (`project.audio`).
+- **Loading:** `loadProject` / `setProject` run `migrateProject` and then the per-load seed-folder normalize pass (`normalizeSeedFolders`, which stays outside the registry because it depends on fetched asset folders). Upgraded projects show an "Upgraded" pill in the TopBar; the new format persists on the next save. Saves also stamp `projects.schema_version = 2`.
+- **Too new:** a payload stamped higher than the build's `PROJECT_FORMAT_VERSION` is refused with a clear message (app: alert; exported player: message rendered into the container).
+- **Policy for future changes:** additive optional fields need no bump — old builds ignore unknown keys. Bump the version (and register a `{from, to, migrate}` entry) only when old builds would *mis-render* the new shape. Builds already in the wild can't be fixed retroactively; they degrade silently — that's the accepted trade-off.

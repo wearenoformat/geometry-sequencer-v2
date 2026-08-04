@@ -24,7 +24,8 @@ Running `supabase db push` from this repo would do nothing useful and could conf
 
 - **`projects.schema_version`** — v1 rows are `1`, v2 rows should be `2`. v1 doesn't yet filter on this (tracked in tasks.tsv); until it does, be careful not to write v2-shaped data to rows v1 will try to render.
 - **`asset_folders` + `assets`** tables — v2-only. Flat folder structure. Metadata only; blob lives in Storage.
-- **Storage bucket `v2-user-assets`** — private, 10MB cap, MIME allowlist (`image/svg+xml`, `image/png`, `image/jpeg`, `text/plain`). Path convention: `{user_id}/{asset_id}.{ext}`. RLS enforces first path segment = `auth.uid()`.
+- **Storage bucket `v2-user-assets`** — private, 25MB cap, MIME allowlist (`image/svg+xml`, `image/png`, `image/jpeg`, `text/plain`, `audio/mpeg`). Path convention: `{user_id}/{asset_id}.{ext}`. RLS enforces first path segment = `auth.uid()`. The app enforces a tighter 10MB cap for images/text; only mp3 music tracks may use the full 25MB.
+- **Project JSON `formatVersion`** — every saved project payload carries `formatVersion` (see [App/src/utils/projectMigrations.ts](./App/src/utils/projectMigrations.ts) for the current number, migration registry, and policy). Additive optional fields need no bump; bump only when old builds would mis-render the new shape, and register a migration. Loads auto-migrate older payloads (in memory, persisted on save); payloads newer than the build are refused with a message. v2 saves also stamp the `projects.schema_version` column with `2`.
 - **`profiles`** (with `is_admin` flag) — shared with v1. Admin policies already exist on all tables.
 - **Project `id`** — `text` column, not DB-generated. v2 should prefix IDs (e.g. `v2_<uuid>`) to make eventual migration from v1 trivial (`WHERE id LIKE 'v2_%'`).
 

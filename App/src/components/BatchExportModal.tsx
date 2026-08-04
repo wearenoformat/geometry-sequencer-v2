@@ -75,6 +75,7 @@ const BatchExportModal: React.FC<BatchExportModalProps> = ({ folder, projects: p
 
     const abortRef = useRef<AbortController | null>(null);
     const projectThumbnails = useStore(s => s.projectThumbnails);
+    const signedUrlForAsset = useStore(s => s.signedUrlForAsset);
 
     // ── Load full project data on open ────────────────────────────────
     useEffect(() => {
@@ -147,7 +148,10 @@ const BatchExportModal: React.FC<BatchExportModalProps> = ({ folder, projects: p
     }, [usesAstro, usesAmino]);
 
     useEffect(() => {
-        const formats = getSupportedMimeTypes();
+        // Batch projects load later, so we can't know yet whether any carry a
+        // music track — prefer audio-capable codec strings up front (they work
+        // fine for audio-less recordings too).
+        const formats = getSupportedMimeTypes(true);
         setSupportedFormats(formats);
         if (formats.length > 0) setSelectedFormat(formats[0]);
     }, [getSupportedMimeTypes]);
@@ -228,6 +232,7 @@ const BatchExportModal: React.FC<BatchExportModalProps> = ({ folder, projects: p
                         selectedFormat,
                         startRecording,
                         stopRecording,
+                        signedUrlForAsset,
                     });
                     filename = `${folderSlug}_video_export.zip`;
                     break;
