@@ -5,6 +5,7 @@ import { DEFAULT_ANIMATABLES } from '../constants/defaults';
 import { CROP_STORAGE_KEY } from '../components/cropPreview';
 import { sanitizeSvgFile } from '../utils/sanitizeSvg';
 import { optimizeAsset } from '../utils/assetOptimizer';
+import { migrateProject, ProjectTooNewError, PROJECT_FORMAT_VERSION } from '../utils/projectMigrations';
 import { captureThumbnail } from '../utils/thumbnailGenerator';
 import type { SavedColor, SavedGradient, GradientStop } from '../types';
 
@@ -58,6 +59,7 @@ const extensionForMime = (mime: AssetMimeType): string | null => {
         case 'image/png': return 'png';
         case 'image/jpeg': return 'jpg';
         case 'text/plain': return 'txt';
+        case 'audio/mpeg': return 'mp3';
         default: return null;
     }
 };
@@ -198,74 +200,12 @@ const recalculateLayerBounds = (keyframes: LayerKeyframe[], currentTimeline: { s
     };
 };
 
-const migrateLegacyAnimationLayer = (layer: any): Layer => {
-    if (layer.keyframes) return layer as Layer;
-
-    const startVal: any = {};
-    const midVal: any = {};
-    const endVal: any = {};
-
-    if (layer.animation) {
-        // Only copy values that are actually present. A missing start/middle/end
-        // (common in legacy data where a property wasn't fully keyed) must fall
-        // through to DEFAULT_ANIMATABLES — spreading an `undefined` would clobber
-        // the default and feed NaN into interpolation, snapping the element to a
-        // fallback position around that keyframe's time.
-        const assign = (target: any, key: string, val: unknown) => {
-            if (val !== undefined) target[key] = val;
-        };
-        Object.keys(layer.animation).forEach(key => {
-            const prop = layer.animation[key];
-            if (prop && typeof prop === 'object') {
-                assign(startVal, key, prop.start);
-                assign(midVal, key, prop.middle);
-                assign(endVal, key, prop.end);
-            }
-        });
-    }
-
-    const fill = (obj: any) => ({ ...DEFAULT_ANIMATABLES, ...obj });
-    const duration = (layer.timeline?.end || 10) - (layer.timeline?.start || 0);
-
-    return {
-        ...layer,
-        keyframes: [
-            { id: 'kf-start', time: 0, value: fill(startVal), easing: layer.animation?.easingSM || 'easeInOutSine' },
-            { id: 'kf-mid', time: duration / 2, value: fill(midVal), easing: layer.animation?.easingME || 'easeInOutSine' },
-            { id: 'kf-end', time: duration, value: fill(endVal), easing: 'linear' }
-        ]
-    } as Layer;
-};
-
-// radialArc / radialArc2 were promoted from layer.config to animatable keyframe
-// properties. Keyframes authored before the promotion don't carry them, and a
-// missing key interpolates toward 0 (see interpolateValues) — which would collapse
-// the ring. Seed each keyframe from the layer's config value (defaulting to a full
-// 360 ring) so existing projects keep their arc and interpolation stays stable.
-const seedPromotedAnimatables = (layer: Layer): Layer => {
-    if (!layer.keyframes?.length) return layer;
-    const cfg = layer.config as any;
-    const arc = cfg?.radialArc ?? 360;
-    const arc2 = cfg?.radialArc2 ?? 360;
-
-    let changed = false;
-    const keyframes = layer.keyframes.map(kf => {
-        const value = kf.value as any;
-        if (value?.radialArc !== undefined && value?.radialArc2 !== undefined) return kf;
-        changed = true;
-        return {
-            ...kf,
-            value: {
-                ...value,
-                radialArc: value?.radialArc ?? arc,
-                radialArc2: value?.radialArc2 ?? arc2,
-            },
-        };
-    });
-    return changed ? { ...layer, keyframes } : layer;
-};
-
-const normalizeProjectForV2 = (
+// Retype legacy astrology/amino/iching layers onto their seed asset folders.
+// Deliberately NOT part of the formatVersion migration chain in
+// utils/projectMigrations.ts: it depends on the user's fetched assetFolders
+// (matched by name) and silently no-ops when they aren't loaded yet, so it must
+// stay an idempotent per-load pass rather than a run-once versioned migration.
+const normalizeSeedFolders = (
     projectData: Project,
     seedFoldersByName: Map<string, string>
 ): Project => {
@@ -273,23 +213,20 @@ const normalizeProjectForV2 = (
 
     return {
         ...projectData,
-        layers: projectData.layers.map((rawLayer: any) => {
-            const migrated = migrateLegacyAnimationLayer(rawLayer);
-            const seedName = LEGACY_TYPE_TO_SEED_FOLDER[migrated.type];
+        layers: projectData.layers.map((layer: Layer) => {
+            const seedName = LEGACY_TYPE_TO_SEED_FOLDER[layer.type];
             const folderId = seedName ? seedFoldersByName.get(seedName) : undefined;
 
-            const layer: Layer = folderId
+            return folderId
                 ? ({
-                    ...migrated,
+                    ...layer,
                     type: 'asset_set',
                     config: {
-                        ...migrated.config,
+                        ...layer.config,
                         assetFolderId: folderId,
                     },
                 } as Layer)
-                : migrated;
-
-            return seedPromotedAnimatables(layer);
+                : layer;
         }),
     };
 };
@@ -307,6 +244,7 @@ const referencedAssetFolderIds = (projectData: Project): string[] => {
 const INITIAL_PROJECT: Project = {
     id: 'pro-default',
     name: 'New Project',
+    formatVersion: PROJECT_FORMAT_VERSION,
     duration: 10,
     backgroundColor: '#000000',
     layers: [createDefaultLayer(0)],
@@ -368,6 +306,7 @@ export const useStore = create<AppState>((set, get) => {
         currentTime: 0,
         isPlaying: false,
         isLooping: true, // Default to true
+        upgradedFromVersion: null,
         activeLayerId: INITIAL_PROJECT.layers[0].id,
         selectedLayerIds: [],
         activeKeyframeId: INITIAL_PROJECT.layers[0].keyframes[0].id,
@@ -457,11 +396,22 @@ export const useStore = create<AppState>((set, get) => {
         setCurrentTime: (time: number) => set({ currentTime: time }),
 
         setProject: (project: Project) => {
+            let migrated;
+            try {
+                migrated = migrateProject(project);
+            } catch (e) {
+                if (e instanceof ProjectTooNewError) {
+                    alert(`${e.message}\n\nRefresh the app to get the latest version, then try again.`);
+                    return;
+                }
+                throw e;
+            }
             const foldersByName = new Map(get().assetFolders.map(f => [f.name, f.id]));
-            const normalizedProject = normalizeProjectForV2(project, foldersByName);
+            const normalizedProject = normalizeSeedFolders(migrated.project, foldersByName);
             referencedAssetFolderIds(normalizedProject).forEach((fid) => { get().fetchAssets(fid); });
             set({
                 project: normalizedProject,
+                upgradedFromVersion: migrated.upgradedFrom,
                 activeLayerId: normalizedProject.layers[0]?.id || null,
                 activeKeyframeId: normalizedProject.layers[0]?.keyframes?.[0]?.id || null,
                 isFreshProject: false
@@ -1174,7 +1124,9 @@ export const useStore = create<AppState>((set, get) => {
                 return;
             }
 
-            const updatedProject = { ...project, lastModified: Date.now() };
+            // Stamp the current format version (defensive — the in-memory project
+            // is already migrated) and mark the row as v2-shaped for the shared DB.
+            const updatedProject = { ...project, formatVersion: PROJECT_FORMAT_VERSION, lastModified: Date.now() };
 
             try {
                 // Upsert to Supabase
@@ -1184,6 +1136,7 @@ export const useStore = create<AppState>((set, get) => {
                     name: updatedProject.name,
                     data: updatedProject, // Full JSON
                     last_modified: updatedProject.lastModified,
+                    schema_version: 2,
                 };
 
                 // Try with folder_id first
@@ -1210,7 +1163,8 @@ export const useStore = create<AppState>((set, get) => {
                     }
                 }
 
-                set({ project: updatedProject });
+                // Saving persists the current format — the "upgraded" badge no longer applies.
+                set({ project: updatedProject, upgradedFromVersion: null });
                 await get().fetchProjects();
 
                 // Snapshot the live canvas to a thumbnail and upload (fire-and-forget;
@@ -1242,11 +1196,22 @@ export const useStore = create<AppState>((set, get) => {
                 }
 
                 if (projectData) {
+                    let migrated;
+                    try {
+                        migrated = migrateProject(projectData);
+                    } catch (e) {
+                        if (e instanceof ProjectTooNewError) {
+                            alert(`${e.message}\n\nRefresh the app to get the latest version, then try again.`);
+                            return;
+                        }
+                        throw e;
+                    }
                     const foldersByName = new Map(get().assetFolders.map(f => [f.name, f.id]));
-                    projectData = normalizeProjectForV2(projectData, foldersByName);
+                    projectData = normalizeSeedFolders(migrated.project, foldersByName);
 
                     set({
                         project: projectData,
+                        upgradedFromVersion: migrated.upgradedFrom,
                         currentView: view,
                         activeLayerId: projectData.layers[0]?.id || null,
                         activeKeyframeId: projectData.layers[0]?.keyframes[0]?.id || null,
@@ -1276,6 +1241,7 @@ export const useStore = create<AppState>((set, get) => {
             };
             set({
                 project: newProject,
+                upgradedFromVersion: null,
                 currentView: 'editor',
                 activeLayerId: newProject.layers[0]?.id || null,
                 activeKeyframeId: newProject.layers[0]?.keyframes[0]?.id || null, // Select first keyframe
@@ -1915,15 +1881,18 @@ export const useStore = create<AppState>((set, get) => {
             const { user } = get();
             if (!user) return undefined;
 
-            const allowed: AssetMimeType[] = ['image/svg+xml', 'image/png', 'image/jpeg', 'text/plain'];
+            const allowed: AssetMimeType[] = ['image/svg+xml', 'image/png', 'image/jpeg', 'text/plain', 'audio/mpeg'];
             if (!allowed.includes(file.type as AssetMimeType)) {
                 console.error(`Rejected upload: ${file.type} not in allowlist`);
                 return undefined;
             }
 
-            const MAX_SIZE = 10 * 1024 * 1024; // matches bucket cap
+            const isAudio = file.type === 'audio/mpeg';
+            // Bucket cap is 25MB; keep the original 10MB ceiling for images/text
+            // (they're optimized to ~200KB anyway) and allow audio up to the cap.
+            const MAX_SIZE = (isAudio ? 25 : 10) * 1024 * 1024;
             if (file.size > MAX_SIZE) {
-                console.error(`Rejected upload: ${file.name} exceeds 10MB`);
+                console.error(`Rejected upload: ${file.name} exceeds ${isAudio ? 25 : 10}MB`);
                 return undefined;
             }
 
@@ -1939,8 +1908,11 @@ export const useStore = create<AppState>((set, get) => {
             }
 
             // Compress before upload — SVGO for SVG, canvas re-encode for raster.
-            // Target ~200KB steady-state; 10MB bucket cap is the ceiling, not a goal.
-            uploadFile = await optimizeAsset(uploadFile);
+            // Target ~200KB steady-state; bucket cap is the ceiling, not a goal.
+            // Audio is uploaded as-is.
+            if (!isAudio) {
+                uploadFile = await optimizeAsset(uploadFile);
+            }
 
             const assetId = crypto.randomUUID();
             const ext = extensionForMime(uploadFile.type as AssetMimeType) || guessExtensionFromName(file.name) || 'bin';
@@ -2025,6 +1997,63 @@ export const useStore = create<AppState>((set, get) => {
                 console.error('Failed to upload asset', e);
                 return undefined;
             }
+        },
+
+        attachProjectAudio: async (file: File) => {
+            // Some browsers report mp3s as audio/mp3 — normalize before the allowlist.
+            let audioFile = file;
+            if (file.type === 'audio/mp3' || (file.type === '' && file.name.toLowerCase().endsWith('.mp3'))) {
+                audioFile = new File([file], file.name, { type: 'audio/mpeg' });
+            }
+            if (audioFile.type !== 'audio/mpeg') {
+                alert('Only MP3 files are supported for the music track.');
+                return;
+            }
+
+            // uploadAsset silently returns undefined for guests — give a
+            // specific message instead of the generic upload failure.
+            if (!get().user) {
+                alert('Sign in to add music — the track is stored with your account\'s assets.');
+                return;
+            }
+
+            const asset = await get().uploadAsset(null, audioFile);
+            if (!asset) {
+                alert('Music upload failed. MP3s up to 25MB are supported.');
+                return;
+            }
+
+            // Measure duration from the local file (cheaper than a signed-URL round trip).
+            const audioDuration = await new Promise<number>((resolve) => {
+                const url = URL.createObjectURL(audioFile);
+                const el = new Audio();
+                el.onloadedmetadata = () => {
+                    URL.revokeObjectURL(url);
+                    resolve(isFinite(el.duration) ? el.duration : 0);
+                };
+                el.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    resolve(0);
+                };
+                el.src = url;
+            });
+
+            get().updateProject({
+                audio: {
+                    assetId: asset.id,
+                    fileName: file.name,
+                    audioDuration,
+                    offset: 0,
+                    volume: 1,
+                    muted: false,
+                },
+            });
+        },
+
+        removeProjectAudio: () => {
+            // Detach only — the uploaded asset stays in the library (other
+            // projects may reference it).
+            get().updateProject({ audio: null });
         },
 
         deleteAsset: async (id: string) => {
@@ -2581,7 +2610,15 @@ export const useStore = create<AppState>((set, get) => {
                 }
 
                 const foldersByName = new Map(get().assetFolders.map(f => [f.name, f.id]));
-                const projectData = normalizeProjectForV2(data.data as Project, foldersByName);
+                // Admin preview of a too-new project: fall back to the raw data
+                // (read-only preview; better than blocking the admin view).
+                let migratedData: Project = data.data as Project;
+                try {
+                    migratedData = migrateProject(migratedData).project;
+                } catch (e) {
+                    if (!(e instanceof ProjectTooNewError)) throw e;
+                }
+                const projectData = normalizeSeedFolders(migratedData, foldersByName);
                 referencedAssetFolderIds(projectData).forEach((fid) => { get().fetchAssets(fid); });
 
                 return projectData;

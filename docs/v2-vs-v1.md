@@ -33,7 +33,8 @@ In v2 they are **seeded asset folders** — real folders of SVGs in the new asse
 
 **Backend bits:**
 - New tables: `asset_folders`, `assets`.
-- New Supabase Storage bucket: `v2-user-assets` (private, 10 MB cap, MIME-allowlisted, RLS scoped to the user's first path segment).
+- New Supabase Storage bucket: `v2-user-assets` (private, 25 MB cap, MIME-allowlisted incl. `audio/mpeg`, RLS scoped to the user's first path segment).
+- **Music track** — one mp3 per project (`project.audio`), shown as a pinned blue waveform row in the timeline, played in sync in the editor, and carried into video (muxed), HTML, React, and React Native exports.
 - Pre-upload compression: SVGO for SVG, sharp/pngquant for PNG, mozjpeg for JPEG. Bucket cap is the ceiling, not a target — most assets land around 200 KB.
 - Mipmaps + anisotropic filtering on raster textures so PNG/JPEG layers stay sharp at any zoom.
 - SVGs are rasterized at 4× resolution for fast Pixi rendering. (Optional pure-vector mode planned — see "Coming soon".)
@@ -102,7 +103,7 @@ In v2 they are **seeded asset folders** — real folders of SVGs in the new asse
 
 | Concern | What we do |
 | --- | --- |
-| Project schema version | v1 rows are `schema_version = 1`, v2 rows should be `schema_version = 2`. v1 doesn't yet filter on this — until it does, be careful not to write v2-shaped data into rows v1 will try to render. (Tracked.) |
+| Project schema version | v1 rows are `schema_version = 1`, v2 rows are `schema_version = 2` — v2's `saveProject` now stamps the column on every save. v1 doesn't yet filter on this (tracked; now actionable in the v1 repo). Separately, the JSON payload itself carries `formatVersion` (see `App/src/utils/projectMigrations.ts`). |
 | Project IDs | v2 prefixes its IDs with `v2_` so eventual migration is `WHERE id LIKE 'v2_%'`. |
 | Migrations | All schema migrations live in the **v1 repo** at `App/supabase/migrations/`. Never add a `supabase/migrations/` folder in the v2 repo. |
 | Asset RLS | First path segment must equal `auth.uid()`. Sharing a project to a different user doesn't share the underlying asset blobs — a clone-on-share mechanism is planned. |

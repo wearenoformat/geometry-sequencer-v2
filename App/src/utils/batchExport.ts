@@ -7,6 +7,7 @@
 // across all projects in the output to keep the zip small.
 
 import JSZip from 'jszip';
+import { useStore } from '../store/useStore';
 import type { Project } from '../types';
 import { EXPORT_TEMPLATES, REACT_NATIVE_TEMPLATES } from '../data/exportTemplates';
 import {
@@ -21,6 +22,12 @@ import {
     stripThumbnail,
     type CollectedExport,
 } from './exportHelpers';
+import {
+    getVideoDimensions,
+    applyExportViewScale,
+    type VideoResolution,
+    type VideoAspectRatio,
+} from '../components/videoFormats';
 
 type ProjectWithThumb = Project & { thumbnailData?: string };
 
@@ -299,26 +306,43 @@ export async function buildBatchReactZip(opts: BatchOpts): Promise<Blob> {
         zip.file(filename, content);
     }
 
+    // Per-project audio: write each referenced mp3 into the Vite public dir
+    // and record its site-root path (null when the project has no track).
+    const audioSrcs: (string | null)[] = [];
     for (let i = 0; i < projects.length; i++) {
         checkAbort(signal);
         onProgress(i, 'running', 'Writing animation JSON', 0);
         const p = projects[i] as ProjectWithThumb;
         zip.file(`src/animations/${slugs[i]}.json`, JSON.stringify(stripThumbnail(p), null, 2));
         writeThumbnailFile(zip, p, `src/animations/${slugs[i]}`);
+
+        let audioSrc: string | null = null;
+        if (p.audio?.assetId) {
+            onProgress(i, 'running', 'Fetching audio', 50);
+            const url = await useStore.getState().signedUrlForAsset(p.audio.assetId);
+            if (url) {
+                const res = await fetch(url);
+                if (res.ok) {
+                    zip.file(`public/audio-${slugs[i]}.mp3`, await res.blob());
+                    audioSrc = `/audio-${slugs[i]}.mp3`;
+                }
+            }
+        }
+        audioSrcs.push(audioSrc);
         onProgress(i, 'done', 'Done', 100);
     }
 
     const imports = slugs.map((s, i) => `import anim_${i} from './animations/${s}.json';`).join('\n');
     const registry = projects.map((p, i) =>
-        `  { name: ${JSON.stringify(p.name)}, data: anim_${i} as unknown as Project },`
+        `  { name: ${JSON.stringify(p.name)}, data: anim_${i} as unknown as Project, audioSrc: ${JSON.stringify(audioSrcs[i])} },`
     ).join('\n');
 
-    const appTsx = `import React, { useState, useEffect } from 'react';
+    const appTsx = `import React, { useState, useEffect, useRef } from 'react';
 import GeometryPlayer from './components/GeometryPlayer';
 import { Project } from './types';
 ${imports}
 
-const ANIMATIONS: { name: string; data: Project }[] = [
+const ANIMATIONS: { name: string; data: Project; audioSrc: string | null }[] = [
 ${registry}
 ];
 
@@ -328,10 +352,35 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(true);
 
   const projectData = ANIMATIONS[activeIndex].data;
+  const audioCfg: any = (projectData as any).audio;
+  const audioSrc = ANIMATIONS[activeIndex].audioSrc;
+  const hasAudio = !!(audioSrc && audioCfg && !audioCfg.muted && audioCfg.volume > 0);
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // When true, the loop (re)starts the audio once playback reaches the
+  // track's offset — rearmed at loop boundaries and on pause/resume.
+  const audioPendingRef = useRef(true);
 
   useEffect(() => {
     setCurrentTime(0);
+    if (!hasAudio) { audioRef.current = null; return; }
+    const el = new Audio(audioSrc as string);
+    el.volume = Math.max(0, Math.min(1, audioCfg.volume));
+    el.preload = 'auto';
+    audioRef.current = el;
+    audioPendingRef.current = true;
+    return () => { el.pause(); audioRef.current = null; };
   }, [activeIndex]);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (isPlaying) {
+      audioPendingRef.current = true;
+    } else {
+      el.pause();
+    }
+  }, [isPlaying]);
 
   useEffect(() => {
     let animationFrameId: number;
@@ -343,7 +392,32 @@ function App() {
       if (isPlaying) {
         setCurrentTime(prev => {
           const duration = (projectData as any).duration || 10;
-          return (prev + dt) % duration;
+          let next = prev + dt;
+          const el = audioRef.current;
+          const offset = audioCfg ? (audioCfg.offset || 0) : 0;
+
+          if (next >= duration) {
+            next = next % duration;
+            if (el) { el.pause(); audioPendingRef.current = true; }
+          }
+
+          if (el) {
+            if (audioPendingRef.current && next >= Math.max(0, offset)) {
+              audioPendingRef.current = false;
+              el.currentTime = Math.max(0, next - offset);
+              // Autoplay policy may reject before a user gesture — pressing
+              // PLAY (a gesture) starts audio and visuals together.
+              el.play().catch(() => setIsPlaying(false));
+            } else if (!el.paused && !el.ended) {
+              // Audio is the clock master while it plays.
+              const audioTime = el.currentTime + offset;
+              if (Math.abs(audioTime - next) > 0.05 && audioTime < duration) {
+                next = audioTime;
+              }
+            }
+          }
+
+          return next;
         });
       }
       animationFrameId = requestAnimationFrame(loop);
@@ -700,14 +774,15 @@ const styles = StyleSheet.create({
 // Video — sequential per-project render, zipped together
 // ────────────────────────────────────────────────────────────────────
 export type BatchVideoOpts = BatchOpts & {
-    resolution: '720p' | '1080p';
-    aspectRatio: '16:9' | '1:1';
+    resolution: VideoResolution;
+    aspectRatio: VideoAspectRatio;
     durationMode: 'loop' | 'time';
     loopCount: number;
     seconds: number;
     selectedFormat: string;
-    startRecording: (canvas: HTMLCanvasElement, mimeType?: string) => void;
+    startRecording: (canvas: HTMLCanvasElement, mimeType?: string, audioTrack?: MediaStreamTrack) => void;
     stopRecording: () => Promise<Blob>;
+    signedUrlForAsset: (id: string) => Promise<string | null>;
 };
 
 // ────────────────────────────────────────────────────────────────────
@@ -753,20 +828,14 @@ export async function runBatchVideoExport(opts: BatchVideoOpts): Promise<Blob> {
     const {
         projects, signal, onProgress,
         resolution, aspectRatio, durationMode, loopCount, seconds, selectedFormat,
-        transparentBg, startRecording, stopRecording,
+        transparentBg, startRecording, stopRecording, signedUrlForAsset,
     } = opts;
+    const { createExportAudioGraph } = await import('../components/exportAudio');
     const slugs = buildSlugMap(projects);
     const zip = new JSZip();
 
-    let width = 1920;
-    let height = 1080;
-    if (resolution === '720p') {
-        height = 720;
-        width = aspectRatio === '16:9' ? 1280 : 720;
-    } else {
-        height = 1080;
-        width = aspectRatio === '16:9' ? 1920 : 1080;
-    }
+    const dims = getVideoDimensions(resolution, aspectRatio);
+    const { width, height } = dims;
 
     const { Application } = await import('pixi.js');
     const { GeometryRenderer } = await import('../rendering/GeometryRenderer');
@@ -795,12 +864,20 @@ export async function runBatchVideoExport(opts: BatchVideoOpts): Promise<Blob> {
             backgroundAlpha: transparentBg ? 0 : 1,
         });
 
+        // Frame the export like the editor: same content region as the
+        // crop-preview guides regardless of output resolution.
+        applyExportViewScale(app.stage, dims);
+
         const renderer = new GeometryRenderer();
         const totalDuration = durationMode === 'loop'
             ? (project.duration || 10) * loopCount
             : seconds;
 
-        startRecording(canvas, selectedFormat);
+        // Music track (null when absent/muted) — one graph per project.
+        const audioGraph = await createExportAudioGraph(project, signedUrlForAsset);
+
+        startRecording(canvas, selectedFormat, audioGraph?.track);
+        audioGraph?.start(totalDuration, project.duration || 10);
         onProgress(i, 'running', 'Recording', 0);
 
         await new Promise<void>((resolve, reject) => {
@@ -836,12 +913,14 @@ export async function runBatchVideoExport(opts: BatchVideoOpts): Promise<Blob> {
         }).catch(async (err) => {
             // On abort, still stop the recorder so MediaRecorder doesn't leak.
             try { await stopRecording(); } catch {}
+            await audioGraph?.dispose();
             renderer.cleanup();
             app.destroy(true, { children: true, texture: true });
             throw err;
         });
 
         const blob = await stopRecording();
+        await audioGraph?.dispose();
         renderer.cleanup();
         app.destroy(true, { children: true, texture: true });
 

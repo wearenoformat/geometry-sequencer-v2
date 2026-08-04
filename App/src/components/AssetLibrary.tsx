@@ -9,6 +9,7 @@ import {
     Image as ImageIcon,
     Loader2,
     AlertCircle,
+    Music,
 } from 'lucide-react';
 import {
     DndContext,
@@ -130,15 +131,26 @@ const readDroppedAssetFiles = async (dataTransfer: DataTransfer): Promise<Picked
 const Thumbnail = ({ asset }: { asset: Asset }) => {
     const signedUrlForAsset = useStore(s => s.signedUrlForAsset);
     const [state, setState] = useState<ThumbState>({ status: 'loading' });
+    const isAudio = asset.mimeType === 'audio/mpeg';
 
     useEffect(() => {
+        if (isAudio) return; // no visual to fetch
         let cancelled = false;
         signedUrlForAsset(asset.id).then(u => {
             if (cancelled) return;
             setState(u ? { status: 'ready', url: u } : { status: 'failed' });
         });
         return () => { cancelled = true; };
-    }, [asset.id, signedUrlForAsset]);
+    }, [asset.id, signedUrlForAsset, isAudio]);
+
+    // Audio assets (project music tracks) have no visual — show a music glyph.
+    if (isAudio) {
+        return (
+            <div className="w-full h-full flex items-center justify-center text-white/40">
+                <Music size={18} />
+            </div>
+        );
+    }
 
     const failed = state.status === 'failed';
     const url = state.status === 'ready' ? state.url : null;

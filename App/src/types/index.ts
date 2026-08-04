@@ -22,7 +22,7 @@ export interface Folder {
     isOpen: boolean; // For UI state
 }
 
-export type AssetMimeType = 'image/svg+xml' | 'image/png' | 'image/jpeg' | 'text/plain';
+export type AssetMimeType = 'image/svg+xml' | 'image/png' | 'image/jpeg' | 'text/plain' | 'audio/mpeg';
 
 export interface AssetFolder {
     id: string;
@@ -282,14 +282,29 @@ export interface Layer {
     symmetry: SymmetryConfig;
 }
 
+// The project's single music track. Not a Layer — it renders as a pinned row
+// in the Timeline and never passes through the geometry renderer.
+export interface ProjectAudio {
+    assetId: string;       // row in `assets`, blob in the v2-user-assets bucket
+    fileName: string;      // original filename, for display
+    audioDuration: number; // seconds, measured at attach time
+    offset: number;        // project time (s) where the audio starts; default 0
+    volume: number;        // 0..1
+    muted: boolean;
+}
+
 export interface Project {
     id: string;
     name: string;
+    // Payload format version — see utils/projectMigrations.ts. Missing on
+    // projects saved before versioning existed (treated as legacy).
+    formatVersion?: number;
     duration: number;
     backgroundColor?: string;
     lastModified?: number;
     gradientColor?: string;
     layers: Layer[];
+    audio?: ProjectAudio | null; // single music track (see ProjectAudio)
     zoom?: number; // Zoom factor for the entire animation
     folderId?: string | null;
     globalLineColor?: string;
@@ -333,6 +348,10 @@ export interface AppState {
     signedUrlForAsset: (id: string) => Promise<string | null>;
     seedDefaultAssetFolders: () => Promise<void>;
 
+    // Project music track
+    attachProjectAudio: (file: File) => Promise<void>;
+    removeProjectAudio: () => void;
+
     // Project thumbnail actions
     captureCurrentProjectThumbnail: (captureTimeOverride?: number | 'end') => Promise<Blob | null>;
     uploadProjectThumbnail: (projectId: string, blob: Blob) => Promise<void>;
@@ -360,6 +379,9 @@ export interface AppState {
     currentTime: number;
     isPlaying: boolean;
     isLooping: boolean; // New
+    // Set when the loaded project was auto-migrated from an older formatVersion;
+    // cleared on save (which persists the new format) and on new project.
+    upgradedFromVersion: number | null;
     activeLayerId: string | null;
     selectedLayerIds: string[]; // New
     activeKeyframeId: string | null; // Changed from activeKeyState

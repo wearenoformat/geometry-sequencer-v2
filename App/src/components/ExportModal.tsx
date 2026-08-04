@@ -11,6 +11,17 @@ import {
     countAssetLayers,
     escapeForTemplate,
 } from '../utils/exportHelpers';
+import {
+    VIDEO_RESOLUTIONS,
+    VIDEO_ASPECT_RATIOS,
+    RESOLUTION_LABELS,
+    ASPECT_RATIO_LABELS,
+    getVideoDimensions,
+    applyExportViewScale,
+    aspectRatioSlug,
+    type VideoResolution,
+    type VideoAspectRatio,
+} from './videoFormats';
 
 interface ExportModalProps {
     onClose: () => void;
@@ -53,32 +64,27 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
     // New State for Transparent Background
     const [transparentBg, setTransparentBg] = useState(false);
 
-    const [resolution, setResolution] = useState<'720p' | '1080p'>('1080p');
-    const [aspectRatio, setAspectRatio] = useState<'16:9' | '1:1'>('16:9');
+    const [resolution, setResolution] = useState<VideoResolution>('1080p');
+    const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
 
     const [supportedFormats, setSupportedFormats] = useState<string[]>([]);
     const [selectedFormat, setSelectedFormat] = useState<string>('');
 
+    const hasAudibleAudio = !!(project.audio && !project.audio.muted && project.audio.volume > 0);
+
     React.useEffect(() => {
-        const formats = getSupportedMimeTypes();
+        const formats = getSupportedMimeTypes(hasAudibleAudio);
         setSupportedFormats(formats);
         if (formats.length > 0) setSelectedFormat(formats[0]);
-    }, [getSupportedMimeTypes]);
+    }, [getSupportedMimeTypes, hasAudibleAudio]);
 
     const handleVideoExport = async () => {
         setIsExporting(true);
         setStatus('Initializing...');
 
         // 1. Setup Dimensions
-        let width = 1920;
-        let height = 1080;
-        if (resolution === '720p') {
-            height = 720;
-            width = aspectRatio === '16:9' ? 1280 : 720;
-        } else {
-            height = 1080;
-            width = aspectRatio === '16:9' ? 1920 : 1080;
-        }
+        const dims = getVideoDimensions(resolution, aspectRatio);
+        const { width, height } = dims;
 
         // 2. Create Detached Canvas & Pixi App
         const canvas = document.createElement('canvas');
@@ -102,16 +108,32 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
             backgroundAlpha: transparentBg ? 0 : 1
         });
 
+        // Frame the export like the editor: same content region as the
+        // crop-preview guides regardless of output resolution.
+        applyExportViewScale(app.stage, dims);
+
         const renderer = new GeometryRenderer();
+
+        // 2b. Prepare the music track (null when absent/muted — export is then
+        // identical to an audio-less one).
+        setStatus('Preparing audio...');
+        const { createExportAudioGraph } = await import('./exportAudio');
+        const audioGraph = await createExportAudioGraph(
+            project,
+            (id) => useStore.getState().signedUrlForAsset(id)
+        );
 
         // 3. Start Recording
         setStatus('Recording...');
-        startRecording(canvas, selectedFormat);
+        startRecording(canvas, selectedFormat, audioGraph?.track);
 
         // 4. Render Loop
         const totalDuration = durationMode === 'loop'
             ? (project.duration || 10) * loopCount
             : seconds;
+
+        // Schedule audio against the same wall-clock origin as the render loop.
+        audioGraph?.start(totalDuration, project.duration || 10);
 
         const startTime = Date.now();
         let animationFrameId: number;
@@ -150,12 +172,13 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
             setStatus('Finalizing...');
 
             const blob = await stopRecording();
+            await audioGraph?.dispose();
 
             renderer.cleanup();
             app.destroy(true, { children: true, texture: true });
 
             const extension = selectedFormat.includes('mp4') ? 'mp4' : 'webm';
-            const filename = `${project.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${resolution}_${aspectRatio === '16:9' ? '16x9' : '1x1'}.${extension}`;
+            const filename = `${project.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${resolution}_${aspectRatioSlug(aspectRatio)}.${extension}`;
             downloadVideo(blob, filename);
 
             setIsExporting(false);
@@ -200,6 +223,12 @@ const ExportModal: React.FC<ExportModalProps> = ({ onClose }) => {
             //    the unzipped index.html. Data URLs work under file:// and
             //    keep the export self-contained.
             const collected = await collectExportAssets(project, setStatus);
+
+            const audioAsset = collected.assets.find(a => a.mimeType === 'audio/mpeg');
+            if (audioAsset) {
+                const embeddedMb = (audioAsset.blob.size * 1.34) / (1024 * 1024); // base64 overhead
+                setStatus(`Embedding audio (~${embeddedMb.toFixed(1)}MB)...`);
+            }
 
             const registryAssets: Record<string, { url: string; mimeType: string }> = {};
             for (const a of collected.assets) {
@@ -342,6 +371,18 @@ ${hasAssets ? '    <!-- Asset Registry (asset_set / asset_single, inlined as dat
 
             // 2. Add Project Data
             zip.file('src/project.json', JSON.stringify(project, null, 2));
+
+            // 2b. Music track — served from the Vite public dir; the template's
+            // App.tsx looks for /audio.mp3 when project.audio is present.
+            if (project.audio?.assetId) {
+                setStatus('Fetching audio...');
+                const url = await useStore.getState().signedUrlForAsset(project.audio.assetId);
+                if (url) {
+                    const res = await fetch(url);
+                    if (res.ok) zip.file('public/audio.mp3', await res.blob());
+                }
+                setStatus('Packaging React App...');
+            }
 
             // 3. Generate Blob
             const content = await zip.generateAsync({ type: 'blob' });
@@ -1100,13 +1141,13 @@ ${hasAssets ? '    <!-- Asset Registry (asset_set / asset_single, inlined as dat
                                     <div className="space-y-2">
                                         <label className="text-xs font-bold text-white/60 uppercase tracking-wider">Resolution</label>
                                         <div className="flex flex-col gap-1">
-                                            {['720p', '1080p'].map(res => (
+                                            {VIDEO_RESOLUTIONS.map(res => (
                                                 <button
                                                     key={res}
-                                                    onClick={() => setResolution(res as any)}
+                                                    onClick={() => setResolution(res)}
                                                     className={`px-3 py-2 text-xs rounded-md transition-all text-left ${resolution === res ? 'bg-[#D4AF37] text-black font-bold' : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'}`}
                                                 >
-                                                    {res} <span className="opacity-50 ml-1">{res === '720p' ? 'HD' : 'FHD'}</span>
+                                                    {res} <span className="opacity-50 ml-1">{RESOLUTION_LABELS[res]}</span>
                                                 </button>
                                             ))}
                                         </div>
@@ -1114,17 +1155,23 @@ ${hasAssets ? '    <!-- Asset Registry (asset_set / asset_single, inlined as dat
                                     <div className="space-y-2">
                                         <label className="text-xs font-bold text-white/60 uppercase tracking-wider">Ratio</label>
                                         <div className="flex flex-col gap-1">
-                                            {['16:9', '1:1'].map(ratio => (
+                                            {VIDEO_ASPECT_RATIOS.map(ratio => (
                                                 <button
                                                     key={ratio}
-                                                    onClick={() => setAspectRatio(ratio as any)}
+                                                    onClick={() => setAspectRatio(ratio)}
                                                     className={`px-3 py-2 text-xs rounded-md transition-all text-left ${aspectRatio === ratio ? 'bg-[#D4AF37] text-black font-bold' : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'}`}
                                                 >
-                                                    {ratio} <span className="opacity-50 ml-1">{ratio === '16:9' ? 'Wide' : 'Square'}</span>
+                                                    {ratio} <span className="opacity-50 ml-1">{ASPECT_RATIO_LABELS[ratio]}</span>
                                                 </button>
                                             ))}
                                         </div>
                                     </div>
+                                </div>
+                                <div className="text-[10px] text-white/30 px-1 -mt-3">
+                                    Output: <span className="text-white/60">
+                                        {getVideoDimensions(resolution, aspectRatio).width}×{getVideoDimensions(resolution, aspectRatio).height}
+                                    </span>
+                                    {resolution === '4K' && <span className="ml-2 text-[#D4AF37]/70">4K renders are slower</span>}
                                 </div>
 
                                 {/* Duration Settings */}
