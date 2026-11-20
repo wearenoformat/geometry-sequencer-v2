@@ -6,6 +6,10 @@ dist-ssr
 .npmrc
 .yarnrc
 .vite
+.netlify/
+.env
+.env.*
+!.env.example
 
 # Generated from tasks.tsv via scripts/tasks_to_xlsx.py
 Task list.xlsx
